@@ -1,0 +1,12 @@
+# The public name `ov`: OpenViking, for the range of the administrator only.
+# OpenViking checks its own keys on each path.
+ov.{$EC2_DOMAIN} {
+	import public-name
+	@admin remote_ip {$EC2_ADMIN_CIDR}
+	handle @admin {
+		reverse_proxy openviking:1933
+	}
+	handle {
+		respond 403
+	}
+}

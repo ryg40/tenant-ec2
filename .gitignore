@@ -1,0 +1,52 @@
+# Runtime configuration and persistent state
+.env
+.env.*
+!.env.example
+.local/
+data/
+secrets/
+state/
+
+# The kit clones of the host (scripts/host-bootstrap.sh makes kits/<kit>/)
+kits/
+
+# Rendered CloudFormation copies and AWS CLI state
+*.rendered.yaml
+*.rendered.yml
+rendered/
+.aws/
+
+# Rendered edge output; the source templates under pangolin/ stay tracked.
+**/pangolin/config/config.yml
+**/pangolin/blueprint.yaml
+**/traefik/config/
+**/gerbil/key
+letsencrypt/
+acme.json
+caddy/data/
+caddy/config/
+
+# Local backup artifacts
+*.snap
+*.tar
+*.tar.gz
+
+# Editor and OS noise
+.DS_Store
+*.swp
+
+# Keys
+*.pem
+*.key
+*.pub
+**/id_*
+!**/id_*.pub.example
+
+# Local links from the security-review setup
+.claude/skills/security-review
+.pi/skills/security-review
+.pi/prompts/security-review.md
+
+# Python bytecode of the publish tooling
+__pycache__/
+*.pyc

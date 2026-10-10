@@ -1,0 +1,897 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  tenant-ec2: the stack of the host. One VPC with one public subnet, one Amazon Linux 2023
+  instance with an Elastic IP, one EFS file system with three access points, one retained
+  data volume, one optional private bucket and the instance role under the boundary.
+
+# Purpose: this template makes the whole stack of the host. The provisioner deploys it
+# (profile tenant-ec2, region us-east-1, capability CAPABILITY_NAMED_IAM) with the deploy
+# script scripts/aws-host.sh. The stack lives in one region and in the first zone of that
+# region.
+#
+# Stack name: tenant-ec2-host (EC2_STACK_NAME of .env.example). The provisioner has rights
+# on a stack with the name of the project and on a stack whose name starts with the project
+# and a hyphen. The IAM stack of the provisioner is bootstrap-tenant-ec2.
+#
+# Parameters:
+#   Project             the name prefix; the default is tenant-ec2
+#   InstanceType        the default is t3a.large; m7i-flex.xlarge when a build has no memory
+#   AmiParameter        the public SSM parameter of the Amazon Linux 2023 x86_64 image
+#   VpcCidr             the private IPv4 range of the VPC; no default, because the scan of
+#                       this repository refuses a private address in a tracked file
+#   AdminCidr           the one IPv4 range that reaches SSH; no default; the prefix length
+#                       is from 16 to 32, so the open range is refused
+#   SshPublicKey        the public key of the new key pair of the host; no default
+#   DataVolumeSize      the size of the data volume in GiB; the default is 50
+#   SnapshotRepository  the HTTPS clone URL of the portable snapshot repository; no default
+#   SnapshotTag         the portable tag that the host clones; no default
+#   SnapshotCommit      the commit of SnapshotTag, 40 hexadecimal digits; no default
+#   Domain              the domain subtree of the host; no default
+#   EnablePangolin      false (default) or true; true opens the two tunnel ports of the
+#                       option pangolin. The deploy script sets it from EC2_OPTIONS.
+#   BedrockEmbedModel   the id of the Bedrock embedding model of the gateway route
+#                       bedrock/embed; the default is amazon.titan-embed-text-v2:0
+#   EnableBucket        false (default) or true; see "Waits on the provisioner stack"
+#   EnableOperations    false (default) or true; see "Waits on the provisioner stack"
+#   AlarmEmail          the address of the billing alarm; only with EnableOperations true
+#   AlarmThreshold      the limit of the billing alarm in USD; only with EnableOperations true
+#
+# Waits on the provisioner stack. The provisioner policy and the boundary are in
+# scripts/aws-provisioner.cfn.yaml, and `scripts/aws-provisioner.sh deploy` deploys them.
+#   - The bucket, its policy, the two bucket statements of the instance role and the output
+#     BucketName. They are behind EnableBucket. EnableBucket stays false until the
+#     installer deploys the provisioner stack of this kit version. The installer sets
+#     it to true after that. The deploy script then writes the output into the environment
+#     file; the user data does not carry the bucket name.
+#   - EnableOperations makes the snapshot policy, log group, billing alarm and topic.
+#     It stays false until the installer deploys the provisioner stack of this kit version.
+#     The administrator-owned snapshot role is bootstrap-<project>-dlm, outside the prefix
+#     the provisioner can edit, under its own boundary. The host boundary has no snapshot
+#     grant. The policy selects Backup; the role also requires Project on the volume.
+#
+# Facts for a deploy:
+#   - The data volume, the file system and the bucket stay when the stack is deleted and
+#     when an update replaces them (RetainExceptOnCreate). When the stack operation that
+#     makes one of them fails, the rollback deletes it: a failed first create leaves
+#     nothing behind.
+#   - CloudFormation makes the bucket name from the stack name, so it starts with the
+#     project. The name holds no account id.
+#   - Do not change VpcCidr after the first deploy: a new range replaces the VPC.
+#   - The EFS access points use these POSIX ids: open-knowledge 10001 (the pinned image),
+#     openviking 1101, shared 1102. Each root directory has the mode 0750.
+#     OpenViking and shared keep their enforced EFS identities; no runtime UID changes.
+#   - The file system policy refuses a client without TLS and a client without an access
+#     point. It allows mount and write for the instance role only, and no root access. It
+#     cannot name the three access points: an access point refers to the file system, so
+#     the reference would be circular. The instance role names them: one statement denies
+#     each client action through another access point.
+#   - The role has no AWS managed policy. The actions of the SSM agent are inline, without
+#     ssm:GetParameter and ssm:GetParameters: the host reads no Parameter Store parameter.
+#   - The role invokes two Bedrock models and no other: GPT-6 Luna through its inference
+#     profile, and the embedding model of BedrockEmbedModel in the region of the stack.
+#     BedrockEmbedModel is the id of a foundation model. A model that needs an inference
+#     profile needs a change of the statement BedrockEmbed.
+#   - The public ports are 80/tcp and 443/tcp. The ports 51820/udp and 21820/udp are open
+#     only with EnablePangolin true: they are the tunnel ports of the Pangolin edge.
+#
+# User data: it writes the stack values to /etc/<project>/stack.env, clones the snapshot
+# repository at SnapshotTag into /opt/<project>, compares the commit of the clone with
+# SnapshotCommit and starts scripts/host-userdata.sh of the clone. No script of the clone
+# runs when the commit is different. That script holds the logic: packages, swap, the data
+# volume, the EFS mounts, then scripts/host-bootstrap.sh when the snapshot has it.
+# The clone of a private snapshot repository: Git asks for a credential, and a helper
+# (GIT_ASKPASS) reads the key EC2_SNAPSHOT_CLONE_TOKEN of the secret <project>/env with the
+# instance role. The token is a read-only token for that one repository. It is not in the
+# user data, a parameter, a URL or a log line. Git does not ask for a public repository,
+# so the secret is not read. Without the key, the clone uses no credential.
+#
+# Not verified: no deploy ran, so no run proved these facts.
+#   - Not verified: the clone of a private snapshot repository works with the token path
+#     above. It needs the secret <project>/env as a JSON object with the key
+#     EC2_SNAPSHOT_CLONE_TOKEN before the first boot. The deploy script writes it.
+#   - Not verified: a restart of the instance does not run the user data again. Then a new
+#     SnapshotTag reaches the host only with a new instance or with a run by hand.
+#   - Not verified: an update that replaces the instance can fail at the attachment of the
+#     data volume, because the old instance holds the volume until it is deleted.
+#   - Not verified: a stack update reads AmiParameter again, so a new Amazon Linux image
+#     can replace the instance. The Elastic IP, the data volume and the file system stay.
+#     The deploy script shows the change set before it runs an update.
+#   - Not verified: EFS accepts the file system policy at the create, and the host mounts
+#     each access point under it.
+
+Parameters:
+  Project:
+    Type: String
+    Default: tenant-ec2
+    AllowedPattern: "[a-z][a-z0-9-]{2,30}"
+    Description: >-
+      The name prefix of the role, the instance profile, the key pair, the secret and the
+      log group. It is the prefix of the provisioner template.
+  InstanceType:
+    Type: String
+    Default: t3a.large
+    AllowedValues: [t3a.large, t3a.xlarge, t3.large, t3.xlarge, m7i-flex.large, m7i-flex.xlarge]
+    Description: The instance type, x86_64. A t type runs in Unlimited credit mode.
+  AmiParameter:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: The public SSM parameter that gives the image id of Amazon Linux 2023, x86_64.
+  VpcCidr:
+    Type: String
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/(1[6-9]|2[0-6])$
+    ConstraintDescription: An IPv4 CIDR with a prefix length from 16 to 26.
+    Description: >-
+      The private IPv4 range of the VPC. The one subnet uses the whole range. Do not change
+      it after the first deploy.
+  AdminCidr:
+    Type: String
+    AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/(1[6-9]|2\d|3[0-2])$
+    ConstraintDescription: >-
+      An IPv4 CIDR with a prefix length from 16 to 32, for example one address with the
+      prefix length 32. The open range and a shorter prefix are refused.
+    Description: The IPv4 range that reaches SSH (22/tcp). Use the one address of the administrator.
+  SshPublicKey:
+    Type: String
+    NoEcho: true
+    AllowedPattern: ^ssh-(ed25519|rsa) [A-Za-z0-9+/]+=*( .*)?$
+    ConstraintDescription: One OpenSSH public key of the type ed25519 or rsa.
+    Description: >-
+      The public key of the key pair of the host. Make a new pair for this host. The private
+      key stays at home.
+  DataVolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 20
+    MaxValue: 1000
+    Description: The size of the data volume in GiB.
+  SnapshotRepository:
+    Type: String
+    AllowedPattern: ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._-]+)+$
+    ConstraintDescription: An HTTPS Git URL with no user name and no credential in it.
+    Description: The clone URL of the portable snapshot repository of this project.
+  SnapshotTag:
+    Type: String
+    AllowedPattern: ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$
+    ConstraintDescription: A Git tag name of letters, digits, ".", "_", "/" and "-".
+    Description: The portable tag at which the host clones the snapshot repository.
+  SnapshotCommit:
+    Type: String
+    AllowedPattern: ^[0-9a-f]{40}$
+    ConstraintDescription: The full commit id, 40 hexadecimal digits in lower case.
+    Description: >-
+      The commit of SnapshotTag. The user data compares it with the commit of the clone and
+      runs no script of the clone when it is different.
+  Domain:
+    Type: String
+    AllowedPattern: ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$
+    ConstraintDescription: A DNS name in lower case.
+    Description: The domain subtree of the host. Each resource of the edge has a name below it.
+  EnablePangolin:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true opens the tunnel ports 51820/udp and 21820/udp of the option pangolin. With
+      false, the security group has no UDP rule.
+  BedrockEmbedModel:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    AllowedPattern: ^[a-z0-9][a-z0-9.:-]{2,99}$
+    ConstraintDescription: >-
+      The id of one Bedrock foundation model, of lower case letters, digits, ".", ":" and
+      "-". It holds no wildcard.
+    Description: >-
+      The Bedrock embedding model that the instance role invokes, in the region of the
+      stack. It is the model of the gateway route bedrock/embed.
+  EnableBucket:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true makes the private bucket, its policy and the bucket rights of the instance role.
+      Keep false until the provisioner policy and the boundary have the S3 rights.
+  EnableOperations:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true makes daily snapshots (keep seven), the log group, the billing alarm and its
+      topic. Keep false until the installer deploys the provisioner stack of this kit version.
+  AlarmEmail:
+    Type: String
+    Default: ""
+    AllowedPattern: ^$|^[^@\s]+@[^@\s]+\.[^@\s]+$
+    ConstraintDescription: One e-mail address, or empty.
+    Description: The address that gets the billing alarm. Necessary with EnableOperations true.
+  AlarmThreshold:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    Description: The billing alarm starts when the estimated charges of the month pass this value in USD.
+
+Rules:
+  AlarmEmailWithOperations:
+    RuleCondition: !Equals [!Ref EnableOperations, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref AlarmEmail, ""]]
+        AssertDescription: EnableOperations true needs AlarmEmail.
+
+Conditions:
+  HasPangolin: !Equals [!Ref EnablePangolin, "true"]
+  HasBucket: !Equals [!Ref EnableBucket, "true"]
+  HasOperations: !Equals [!Ref EnableOperations, "true"]
+  IsBurstable: !Or
+    - !Equals [!Ref InstanceType, t3a.large]
+    - !Equals [!Ref InstanceType, t3a.xlarge]
+    - !Equals [!Ref InstanceType, t3.large]
+    - !Equals [!Ref InstanceType, t3.xlarge]
+
+Resources:
+  # ----- Network: one VPC, one public subnet in the first zone.
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-vpc"}
+        - {Key: Project, Value: !Ref Project}
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-igw"}
+        - {Key: Project, Value: !Ref Project}
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # The subnet gives no public address. The instance gets the Elastic IP as its one address.
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref VpcCidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-public"}
+        - {Key: Project, Value: !Ref Project}
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-public"}
+        - {Key: Project, Value: !Ref Project}
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+
+  # ----- Security groups. Only the ports of the edge are public. The four UDP rules are the
+  # tunnel ports of the option pangolin: they exist only with EnablePangolin true.
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${Project} host: the edge ports from anywhere, SSH from the administrator"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0, Description: http redirect}
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIpv6: "::/0", Description: http redirect}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: https}
+        - {IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIpv6: "::/0", Description: https}
+        - !If
+          - HasPangolin
+          - {IpProtocol: udp, FromPort: 51820, ToPort: 51820, CidrIp: 0.0.0.0/0, Description: WireGuard sites}
+          - !Ref AWS::NoValue
+        - !If
+          - HasPangolin
+          - {IpProtocol: udp, FromPort: 51820, ToPort: 51820, CidrIpv6: "::/0", Description: WireGuard sites}
+          - !Ref AWS::NoValue
+        - !If
+          - HasPangolin
+          - {IpProtocol: udp, FromPort: 21820, ToPort: 21820, CidrIp: 0.0.0.0/0, Description: WireGuard clients}
+          - !Ref AWS::NoValue
+        - !If
+          - HasPangolin
+          - {IpProtocol: udp, FromPort: 21820, ToPort: 21820, CidrIpv6: "::/0", Description: WireGuard clients}
+          - !Ref AWS::NoValue
+        - {IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref AdminCidr, Description: SSH from the administrator}
+      SecurityGroupEgress:
+        - {IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: all egress}
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-host"}
+        - {Key: Project, Value: !Ref Project}
+
+  MountTargetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${Project} EFS mount target: NFS from the host only"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref InstanceSecurityGroup
+          Description: NFS from the instance security group
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-efs"}
+        - {Key: Project, Value: !Ref Project}
+
+  # ----- EFS: one encrypted file system, one mount target, three access points.
+  # No automatic backup. The file system stays when the stack is deleted.
+  FileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      BackupPolicy:
+        Status: DISABLED
+      # Without a policy, each NFS client that reaches the mount target has full access with
+      # no IAM. The policy cannot name the access points: the reference would be circular.
+      # The instance role names them (the statement EfsOnlyTheAccessPoints). The policy names
+      # the role by a condition, because the role does not exist yet when the policy is set.
+      FileSystemPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNoTls
+            Effect: Deny
+            Principal: {AWS: "*"}
+            Action:
+              - elasticfilesystem:ClientMount
+              - elasticfilesystem:ClientWrite
+              - elasticfilesystem:ClientRootAccess
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+          - Sid: DenyNoAccessPoint
+            Effect: Deny
+            Principal: {AWS: "*"}
+            Action:
+              - elasticfilesystem:ClientMount
+              - elasticfilesystem:ClientWrite
+              - elasticfilesystem:ClientRootAccess
+            Condition:
+              "Null":
+                elasticfilesystem:AccessPointArn: "true"
+          # A client with no IAM identity has no principal ARN, so it gets no right.
+          - Sid: AllowHostRole
+            Effect: Allow
+            Principal: {AWS: "*"}
+            Action:
+              - elasticfilesystem:ClientMount
+              - elasticfilesystem:ClientWrite
+            Condition:
+              ArnEquals:
+                aws:PrincipalArn: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-host"
+              Bool:
+                elasticfilesystem:AccessedViaMountTarget: "true"
+      FileSystemTags:
+        - {Key: Name, Value: !Sub "${Project}-efs"}
+        - {Key: Project, Value: !Ref Project}
+
+  MountTarget:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref FileSystem
+      SubnetId: !Ref Subnet
+      SecurityGroups: [!Ref MountTargetSecurityGroup]
+
+  # Each access point sets its own POSIX user and makes its own root directory.
+  AccessPointOpenKnowledge:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: {Uid: "10001", Gid: "10001"}
+      RootDirectory:
+        Path: /open-knowledge
+        CreationInfo: {OwnerUid: "10001", OwnerGid: "10001", Permissions: "0750"}
+      AccessPointTags:
+        - {Key: Name, Value: !Sub "${Project}-open-knowledge"}
+        - {Key: Project, Value: !Ref Project}
+
+  AccessPointOpenViking:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: {Uid: "1101", Gid: "1101"}
+      RootDirectory:
+        Path: /openviking
+        CreationInfo: {OwnerUid: "1101", OwnerGid: "1101", Permissions: "0750"}
+      AccessPointTags:
+        - {Key: Name, Value: !Sub "${Project}-openviking"}
+        - {Key: Project, Value: !Ref Project}
+
+  AccessPointShared:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref FileSystem
+      PosixUser: {Uid: "1102", Gid: "1102"}
+      RootDirectory:
+        Path: /shared
+        CreationInfo: {OwnerUid: "1102", OwnerGid: "1102", Permissions: "0750"}
+      AccessPointTags:
+        - {Key: Name, Value: !Sub "${Project}-shared"}
+        - {Key: Project, Value: !Ref Project}
+
+  # ----- The data volume. It stays when the stack is deleted and when it is replaced.
+  # The snapshot policy selects the tag Backup.
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      AvailabilityZone: !GetAtt Subnet.AvailabilityZone
+      Size: !Ref DataVolumeSize
+      VolumeType: gp3
+      Encrypted: true
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-data"}
+        - {Key: Project, Value: !Ref Project}
+        - {Key: Backup, Value: !Ref Project}
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Instance
+      VolumeId: !Ref DataVolume
+      Device: /dev/xvdf
+
+  # ----- The bucket: private, encrypted at rest, TLS only, with versions. It stays when the
+  # stack is deleted. CloudFormation makes its name from the stack name.
+  Bucket:
+    Type: AWS::S3::Bucket
+    Condition: HasBucket
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      # The role cannot delete a version, so a delete or an overwrite keeps the old object
+      # for 30 days.
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-versions-and-uploads
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasBucket
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNoTls
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt Bucket.Arn
+              - !Sub "${Bucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  # ----- Identity: the key pair, the instance role under the boundary, its instance profile.
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub "${Project}-host"
+      PublicKeyMaterial: !Ref SshPublicKey
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  # The role has only these rights, and no AWS managed policy. It has no ECR right: the host
+  # builds its images.
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Project}-host"
+      Description: !Sub The instance role of the ${Project} host.
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${Project}-boundary"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${Project}-host"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # The SSM agent: Session Manager is the second way to the host. These are the
+              # actions of the boundary statement SsmAgent without ssm:GetParameter and
+              # ssm:GetParameters.
+              - Sid: SsmAgent
+                Effect: Allow
+                Action:
+                  - ssm:DescribeAssociation
+                  - ssm:GetDeployablePatchSnapshotForInstance
+                  - ssm:GetDocument
+                  - ssm:DescribeDocument
+                  - ssm:GetManifest
+                  - ssm:ListAssociations
+                  - ssm:ListInstanceAssociations
+                  - ssm:PutInventory
+                  - ssm:PutComplianceItems
+                  - ssm:PutConfigurePackageResult
+                  - ssm:UpdateAssociationStatus
+                  - ssm:UpdateInstanceAssociationStatus
+                  - ssm:UpdateInstanceInformation
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                  - ec2messages:AcknowledgeMessage
+                  - ec2messages:DeleteMessage
+                  - ec2messages:FailMessage
+                  - ec2messages:GetEndpoint
+                  - ec2messages:GetMessages
+                  - ec2messages:SendReply
+                Resource: "*"
+              - Sid: EfsClient
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                Resource: !GetAtt FileSystem.Arn
+                Condition:
+                  StringEquals:
+                    elasticfilesystem:AccessPointArn:
+                      - !GetAtt AccessPointOpenKnowledge.Arn
+                      - !GetAtt AccessPointOpenViking.Arn
+                      - !GetAtt AccessPointShared.Arn
+              # The file system policy allows the role and cannot name the access points.
+              # This statement does: no client action through another access point or with
+              # no access point.
+              - Sid: EfsOnlyTheAccessPoints
+                Effect: Deny
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                  - elasticfilesystem:ClientRootAccess
+                Resource: !GetAtt FileSystem.Arn
+                Condition:
+                  StringNotEquals:
+                    elasticfilesystem:AccessPointArn:
+                      - !GetAtt AccessPointOpenKnowledge.Arn
+                      - !GetAtt AccessPointOpenViking.Arn
+                      - !GetAtt AccessPointShared.Arn
+              # Secrets Manager adds a hyphen and six characters to the name of a secret.
+              - Sid: EnvSecretRead
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Project}/env-??????"
+              # The two Bedrock statements name one model each. The role invokes no other
+              # model. The inference profile sends a call to the Luna model in more than
+              # one region, so the region of that model is open.
+              - Sid: BedrockLuna
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.openai.gpt-6-luna"
+                  - !Sub "arn:${AWS::Partition}:bedrock:*::foundation-model/openai.gpt-6-luna"
+              # The embedding model answers in one call, so the role has no stream action.
+              - Sid: BedrockEmbed
+                Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockEmbedModel}"
+              # The logs and metric actions of the boundary. The log actions are for the log
+              # groups of the project only.
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/${Project}/*"
+              - Sid: LogsListAndMetrics
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+              # The two bucket statements exist only with EnableBucket true. They give no
+              # right until the boundary has the same S3 actions.
+              - !If
+                - HasBucket
+                - Sid: BucketList
+                  Effect: Allow
+                  Action: s3:ListBucket
+                  Resource: !GetAtt Bucket.Arn
+                - !Ref AWS::NoValue
+              - !If
+                - HasBucket
+                - Sid: BucketObjects
+                  Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:PutObject
+                    - s3:DeleteObject
+                    - s3:AbortMultipartUpload
+                  Resource: !Sub "${Bucket.Arn}/*"
+                - !Ref AWS::NoValue
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${Project}-host"
+      Roles: [!Ref InstanceRole]
+
+  # ----- The instance and its address.
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    DependsOn: GatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-host"}
+        - {Key: Project, Value: !Ref Project}
+
+  # The hop limit is 2: the gateway container reads the instance role through the bridge network.
+  Instance:
+    Type: AWS::EC2::Instance
+    DependsOn: [DefaultRoute, SubnetRouteTableAssociation, MountTarget]
+    Properties:
+      ImageId: !Ref AmiParameter
+      InstanceType: !Ref InstanceType
+      SubnetId: !Ref Subnet
+      SecurityGroupIds: [!Ref InstanceSecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      KeyName: !Ref KeyPair
+      CreditSpecification: !If [IsBurstable, {CPUCredits: unlimited}, !Ref "AWS::NoValue"]
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 2
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 60
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # The user data of the host. It runs one time, at the first boot, as root.
+          # The log is /var/log/cloud-init-output.log. The logic is in scripts/host-userdata.sh.
+          set -eu
+          install -d -m 0755 /etc/${Project}
+          cat >/etc/${Project}/stack.env <<'EOT'
+          EC2_PROJECT=${Project}
+          EC2_AWS_REGION=${AWS::Region}
+          EC2_STACK_NAME=${AWS::StackName}
+          EC2_DOMAIN=${Domain}
+          EC2_SNAPSHOT_TAG=${SnapshotTag}
+          EC2_SNAPSHOT_COMMIT=${SnapshotCommit}
+          EC2_SECRET_ID=${Project}/env
+          EC2_ELASTIC_IP=${ElasticIp.PublicIp}
+          EC2_DATA_VOLUME_ID=${DataVolume}
+          EC2_EFS_ID=${FileSystem}
+          EC2_EFS_AP_OPEN_KNOWLEDGE=${AccessPointOpenKnowledge}
+          EC2_EFS_AP_OPENVIKING=${AccessPointOpenViking}
+          EC2_EFS_AP_SHARED=${AccessPointShared}
+          EC2_ENABLE_OPERATIONS=${EnableOperations}
+          EC2_LOG_GROUP=/${Project}/host
+          EOT
+          # The Elastic IP comes after the start. Before it, the instance has no public address.
+          n=0
+          until [ "$(ec2-metadata --public-ipv4 2>/dev/null | cut -d' ' -f2)" = "${ElasticIp.PublicIp}" ]; do
+            n=$((n + 1))
+            [ "$n" -le 90 ] || { echo "user data: the Elastic IP is not on the instance after 180 s"; break; }
+            sleep 2
+          done
+          dnf install -y git awscli-2 jq
+          repo=/opt/${Project}
+          if [ ! -d "$repo/.git" ]; then
+            # Git asks this helper for a credential only when the repository is private. The
+            # helper holds no token: it reads the token from the secret with the instance role.
+            askpass=/etc/${Project}/snapshot-askpass
+            (umask 077 && cat >"$askpass") <<'EOT'
+          #!/bin/sh
+          case $1 in
+            Username*) echo x-access-token ;;
+            *) aws secretsmanager get-secret-value --region ${AWS::Region} --secret-id ${Project}/env \
+                 --query SecretString --output text | jq -r '.EC2_SNAPSHOT_CLONE_TOKEN // empty' 2>/dev/null ;;
+          esac
+          EOT
+            chmod 0700 "$askpass"
+            rc=0
+            GIT_ASKPASS=$askpass GIT_TERMINAL_PROMPT=0 git -c credential.helper= clone --depth 1 \
+              --branch "${SnapshotTag}" "${SnapshotRepository}" "$repo" || rc=$?
+            rm -f "$askpass"
+            [ "$rc" -eq 0 ] || { echo "user data: the clone of the snapshot repository failed"; exit 1; }
+          fi
+          # A tag can move. No script of the clone runs before this test.
+          head=$(git -C "$repo" rev-parse HEAD)
+          [ "$head" = "${SnapshotCommit}" ] ||
+            { echo "user data: the clone is at the commit $head, not at ${SnapshotCommit}: stop"; exit 1; }
+          [ -f "$repo/scripts/host-userdata.sh" ] ||
+            { echo "user data: the snapshot ${SnapshotTag} has no scripts/host-userdata.sh"; exit 1; }
+          exec sh "$repo/scripts/host-userdata.sh" /etc/${Project}/stack.env
+      Tags:
+        - {Key: Name, Value: !Sub "${Project}-host"}
+        - {Key: Project, Value: !Ref Project}
+        # This conditional reference makes the log group precede an operations boot.
+        - !If [HasOperations, {Key: OperationsLogGroup, Value: !Ref LogGroup}, !Ref AWS::NoValue]
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # ----- Operations. The administrator applies the provisioner change first.
+  SnapshotPolicy:
+    Type: AWS::DLM::LifecyclePolicy
+    Condition: HasOperations
+    Properties:
+      Description: !Sub ${Project} data volume daily snapshots keep seven
+      ExecutionRoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/bootstrap-${Project}-dlm
+      State: ENABLED
+      PolicyDetails:
+        PolicyType: EBS_SNAPSHOT_MANAGEMENT
+        ResourceTypes: [VOLUME]
+        # DLM combines target tags with OR, so use the one backup selector.
+        TargetTags:
+          - {Key: Backup, Value: !Ref Project}
+        Schedules:
+          - Name: daily
+            CreateRule:
+              Interval: 24
+              IntervalUnit: HOURS
+              Times: ["03:00"]
+            RetainRule:
+              Count: 7
+            CopyTags: false
+            TagsToAdd:
+              - {Key: Project, Value: !Ref Project}
+              - {Key: Backup, Value: !Ref Project}
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: HasOperations
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/${Project}/host"
+      RetentionInDays: 14
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasOperations
+    Properties:
+      TopicName: !Sub "${Project}-alarm"
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  AlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: HasOperations
+    Properties:
+      Topics: [!Ref AlarmTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BillingAlarmPublish
+            Effect: Allow
+            Principal: {Service: cloudwatch.amazonaws.com}
+            Action: sns:Publish
+            Resource: !Ref AlarmTopic
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnEquals:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Project}-billing
+
+  AlarmSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasOperations
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  # The billing metric is in us-east-1 only. The account must have billing alerts on.
+  BillingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: AlarmTopicPolicy
+    Condition: HasOperations
+    Properties:
+      AlarmName: !Sub "${Project}-billing"
+      AlarmDescription: !Sub The estimated charges of the month of the ${Project} account pass the limit.
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - {Name: Currency, Value: USD}
+      Statistic: Maximum
+      Period: 21600
+      EvaluationPeriods: 1
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlarmTopic]
+
+Outputs:
+  ElasticIp:
+    Description: The public address of the host. Each DNS record of the domain subtree points at it.
+    Value: !GetAtt ElasticIp.PublicIp
+  InstanceId:
+    Description: The id of the instance, for an SSM session.
+    Value: !Ref Instance
+  FileSystemId:
+    Description: The id of the EFS file system.
+    Value: !Ref FileSystem
+  AccessPointOpenKnowledge:
+    Description: The id of the access point open-knowledge.
+    Value: !Ref AccessPointOpenKnowledge
+  AccessPointOpenViking:
+    Description: The id of the access point openviking.
+    Value: !Ref AccessPointOpenViking
+  AccessPointShared:
+    Description: The id of the access point shared.
+    Value: !Ref AccessPointShared
+  DataVolumeId:
+    Description: The id of the data volume.
+    Value: !Ref DataVolume
+  SnapshotPolicyId:
+    Condition: HasOperations
+    Description: The daily snapshot policy of the data volume (seven snapshots kept).
+    Value: !Ref SnapshotPolicy
+  LogGroupName:
+    Description: The name of the log group of the host. The group exists only with EnableOperations true.
+    Value: !Sub "/${Project}/host"
+  BucketName:
+    Condition: HasBucket
+    Description: The name of the private bucket. The output exists only with EnableBucket true.
+    Value: !Ref Bucket

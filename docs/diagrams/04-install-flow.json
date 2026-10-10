@@ -1,0 +1,491 @@
+{
+  "meta": {
+    "title": "04 / Install flow",
+    "subtitle": "The installer prepares inputs. The instance reads its secret and builds pinned kits.",
+    "summary": "The installer prepares inputs. The instance reads its secret and builds pinned kits.",
+    "snapshot": "Merged source files. No live deployment.",
+    "walkNote": "Arrows show calls or dependencies, not live checks.",
+    "exportBase": "diagram",
+    "sources": []
+  },
+  "categories": [
+    {
+      "id": "aws",
+      "label": "aws",
+      "color": "#285b88"
+    },
+    {
+      "id": "service",
+      "label": "service",
+      "color": "#176b5b"
+    },
+    {
+      "id": "data",
+      "label": "data",
+      "color": "#94601d"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "external",
+      "label": "external",
+      "color": "#52616b"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "core",
+      "label": "Core",
+      "meaning": "The portable core.",
+      "line": "solid"
+    },
+    {
+      "id": "option",
+      "label": "Option",
+      "meaning": "Off until the installer selects it.",
+      "line": "dashed"
+    }
+  ],
+  "edgeKinds": [
+    {
+      "id": "flow",
+      "label": "Call or dependency",
+      "color": "#52616b"
+    }
+  ],
+  "callTypes": [],
+  "systems": [
+    {
+      "id": "dev",
+      "label": "Installer machine / commands",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "host",
+      "label": "EC2 / first boot",
+      "color": "#285b88"
+    }
+  ],
+  "groups": [],
+  "nodes": [
+    {
+      "id": "provision",
+      "system": "dev",
+      "x": 40,
+      "y": 150,
+      "w": 320,
+      "h": 130,
+      "label": "1 / Provisioner\nAdministrator installs IAM\nCreates only bounded roles",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "env",
+      "system": "dev",
+      "x": 530,
+      "y": 150,
+      "w": 340,
+      "h": 130,
+      "label": "2 / .env\nCore names and Entra values\nEC2_OPTIONS / edge names",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "secret",
+      "system": "dev",
+      "x": 1040,
+      "y": 150,
+      "w": 320,
+      "h": 130,
+      "label": "3 / secret\naws-host.sh secret\nWrites <project>/env",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "system": "dev",
+      "x": 1530,
+      "y": 150,
+      "w": 320,
+      "h": 130,
+      "label": "4 / deploy\naws-host.sh deploy\nCloudFormation makes EC2",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "dns",
+      "system": "dev",
+      "x": 1530,
+      "y": 490,
+      "w": 320,
+      "h": 130,
+      "label": "5 / outputs and dns\nReads the Elastic IP\nSets selected A records",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "verify",
+      "system": "dev",
+      "x": 40,
+      "y": 490,
+      "w": 320,
+      "h": 130,
+      "label": "10 / verify\nOne SSM command\nFour internal check parts",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "userdata",
+      "system": "host",
+      "x": 1530,
+      "y": 920,
+      "w": 320,
+      "h": 130,
+      "label": "6 / user data\nCheck snapshot / mount data\nDocker requires four mounts",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "bootstrap",
+      "system": "host",
+      "x": 1040,
+      "y": 920,
+      "w": 320,
+      "h": 130,
+      "label": "7 / host-bootstrap.sh\nReads secret / writes .env\nSelects COMPOSE_FILE",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "system": "host",
+      "x": 530,
+      "y": 920,
+      "w": 340,
+      "h": 130,
+      "label": "8 / kits.lock\nClone tags / check commits\nBuild one kit at a time",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    },
+    {
+      "id": "start",
+      "system": "host",
+      "x": 40,
+      "y": 920,
+      "w": 320,
+      "h": 130,
+      "label": "9 / start and keys\nEdge, gateway, memory, rest\nMakes scoped service keys",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "scripts/host-bootstrap.sh"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "a",
+      "from": "provision",
+      "to": "env",
+      "label": "prepare",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          402,
+          191
+        ]
+      }
+    },
+    {
+      "id": "b",
+      "from": "env",
+      "to": "secret",
+      "label": "validate",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          919,
+          191
+        ]
+      }
+    },
+    {
+      "id": "c",
+      "from": "secret",
+      "to": "deploy",
+      "label": "before boot",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1400,
+          191
+        ]
+      }
+    },
+    {
+      "id": "d",
+      "from": "deploy",
+      "to": "dns",
+      "label": "outputs",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1705,
+          370
+        ]
+      }
+    },
+    {
+      "id": "e",
+      "from": "deploy",
+      "to": "userdata",
+      "label": "EC2 first boot",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "via": [
+          [
+            1960,
+            215
+          ],
+          [
+            1960,
+            985
+          ]
+        ],
+        "labelAt": [
+          1980,
+          680
+        ]
+      }
+    },
+    {
+      "id": "f",
+      "from": "userdata",
+      "to": "bootstrap",
+      "label": "prepared host",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "left",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1375,
+          956
+        ]
+      }
+    },
+    {
+      "id": "g",
+      "from": "bootstrap",
+      "to": "build",
+      "label": "pins only",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "left",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          921,
+          956
+        ]
+      }
+    },
+    {
+      "id": "h",
+      "from": "build",
+      "to": "start",
+      "label": "images",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "left",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          413,
+          956
+        ]
+      }
+    },
+    {
+      "id": "i",
+      "from": "start",
+      "to": "verify",
+      "label": "after bootstrap",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "top",
+          "bottom"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          222,
+          759
+        ]
+      }
+    },
+    {
+      "id": "j",
+      "from": "dns",
+      "to": "verify",
+      "label": "DNS for public access, not internal probes",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "left",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          620,
+          526
+        ]
+      }
+    }
+  ],
+  "scenarios": [],
+  "export": {
+    "stem": "04-install-flow",
+    "notes": [
+      "The secret exists before boot. User data checks SnapshotCommit before it runs any script of the clone.",
+      "Docker drop-in: tenant-ec2-storage.conf requires four durable mounts and the metadata guard before Docker starts.",
+      "Verify: compose ps, file-set test, service list, then verify-deployed.py with file set and public names.",
+      "Verify uses internal requests only. It runs no kits.lock verify line and proves no login, public route or model answer.",
+      "The bootstrap writes COMPOSE_FILE into the host environment file. A manual Compose command uses the same overlays.",
+      "The host keeps generated service keys. The installer saves them and updates the secret after boot.",
+      "This picture is an install order, not a deploy approval. No AWS, Entra, DNS or credential-store change runs here.",
+      "Frames group related parts. Dashed component boxes mark options; all other component boxes mark the core."
+    ]
+  }
+}

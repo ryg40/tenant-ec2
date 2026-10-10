@@ -1,0 +1,523 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  tenant-ec2: the provisioner identity. One IAM user with a scoped policy, and the permissions
+  boundary that each role of the stack carries. An administrator deploys this template
+  (scripts/aws-provisioner.sh deploy). The access key of the user is not a resource of this stack.
+
+# The provisioner deploys the stack of the host. It cannot change this template's resources:
+# it has no right on an IAM user or on an IAM policy.
+# The provisioner makes a role only with the boundary of this template. A role with the boundary
+# gets no IAM right, so the provisioner cannot make a role that has more rights than the boundary.
+# Do not make a role with the name prefix of the project and without the boundary.
+
+Parameters:
+  Project:
+    Type: String
+    Default: tenant-ec2
+    AllowedPattern: "[a-z][a-z0-9-]{2,30}"
+    Description: >-
+      The name prefix of each stack, role, instance profile and secret that the provisioner manages.
+  Regions:
+    Type: CommaDelimitedList
+    Default: us-east-1
+    Description: The regions where the provisioner uses EC2, EFS and SSM sessions.
+
+Resources:
+  # The most rights that a role of the stack can have: the instance role of the host.
+  Boundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-boundary
+      Description: !Sub The permissions boundary of each ${Project} role.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The actions of the AWS managed policy AmazonSSMManagedInstanceCore.
+          - Sid: SsmAgent
+            Effect: Allow
+            Action:
+              - ssm:DescribeAssociation
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+              - ssm:GetManifest
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutInventory
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: "*"
+          - Sid: EfsClient
+            Effect: Allow
+            Action:
+              - elasticfilesystem:ClientMount
+              - elasticfilesystem:ClientWrite
+              - elasticfilesystem:ClientRootAccess
+              - elasticfilesystem:DescribeMountTargets
+              - elasticfilesystem:DescribeFileSystems
+              - elasticfilesystem:DescribeAccessPoints
+            Resource: "*"
+          - Sid: StackSecretsRead
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+              - secretsmanager:DescribeSecret
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:${Project}/*
+          - Sid: Bedrock
+            Effect: Allow
+            Action:
+              - bedrock:*
+              - bedrock-mantle:*
+            Resource: "*"
+          - Sid: HostRead
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - ecr:GetAuthorizationToken
+              - ecr:BatchCheckLayerAvailability
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+            Resource: "*"
+          - Sid: Logs
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogGroups
+              - logs:DescribeLogStreams
+              - cloudwatch:PutMetricData
+            Resource: "*"
+
+          - Sid: ProjectBucketList
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::${Project}-*
+            Condition:
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+          - Sid: ProjectBucketObjects
+            Effect: Allow
+            Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:AbortMultipartUpload]
+            Resource: !Sub arn:${AWS::Partition}:s3:::${Project}-*/*
+            Condition:
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+
+  # The administrator owns this role outside the prefix that the provisioner can edit.
+  # Its managed policy is both its grant and its boundary. Snapshot rights never
+  # enter the host boundary above.
+  SnapshotBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub bootstrap-${Project}-dlm-boundary
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SnapshotDiscovery
+            Effect: Allow
+            Action: [ec2:DescribeVolumes, ec2:DescribeSnapshots]
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+          - Sid: SnapshotSource
+            Effect: Allow
+            Action: ec2:CreateSnapshot
+            Resource: !Sub arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:volume/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                ec2:ResourceTag/Project: !Ref Project
+                ec2:ResourceTag/Backup: !Ref Project
+          - Sid: SnapshotCreate
+            Effect: Allow
+            Action: ec2:CreateSnapshot
+            # EC2 snapshot ARNs have no account segment.
+            Resource: !Sub arn:${AWS::Partition}:ec2:*::snapshot/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                aws:RequestTag/Project: !Ref Project
+                aws:RequestTag/Backup: !Ref Project
+          - Sid: SnapshotTags
+            Effect: Allow
+            Action: ec2:CreateTags
+            Resource: !Sub arn:${AWS::Partition}:ec2:*::snapshot/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                ec2:CreateAction: CreateSnapshot
+                aws:RequestTag/Project: !Ref Project
+                aws:RequestTag/Backup: !Ref Project
+          - Sid: SnapshotDelete
+            Effect: Allow
+            Action: ec2:DeleteSnapshot
+            Resource: !Sub arn:${AWS::Partition}:ec2:*::snapshot/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                ec2:ResourceTag/Project: !Ref Project
+                ec2:ResourceTag/Backup: !Ref Project
+                ec2:Owner: !Ref AWS::AccountId
+              "Null":
+                ec2:ResourceTag/aws:dlm:lifecycle-policy-id: "false"
+          - Sid: SnapshotSchedule
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:EnableRule
+              - events:DisableRule
+              - events:ListTargetsByRule
+              - events:PutTargets
+              - events:RemoveTargets
+            Resource: !Sub arn:${AWS::Partition}:events:*:${AWS::AccountId}:rule/AwsDataLifecycleRule.managed-cwe.*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+
+  SnapshotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub bootstrap-${Project}-dlm
+      PermissionsBoundary: !Ref SnapshotBoundary
+      ManagedPolicyArns: [!Ref SnapshotBoundary]
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: dlm.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub arn:${AWS::Partition}:dlm:*:${AWS::AccountId}:policy/*
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
+  ProvisionerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-provisioner
+      Description: !Sub The rights of the ${Project} provisioner.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StackDeploy
+            Effect: Allow
+            Action: cloudformation:*
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${Project}/*
+              - !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/${Project}-*/*
+          - Sid: StackRead
+            Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudformation:GetTemplateSummary
+              - cloudformation:ListStacks
+            Resource: "*"
+          # EC2 and EFS name a resource by an id, so a name prefix cannot limit them.
+          - Sid: Compute
+            Effect: Allow
+            Action:
+              - ec2:*
+              - elasticfilesystem:*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+          # The public parameters of AWS: the Amazon Linux image id.
+          - Sid: SsmPublicParameters
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: !Sub arn:${AWS::Partition}:ssm:*::parameter/aws/service/*
+          # Break-glass access to the host without SSH.
+          - Sid: SsmSession
+            Effect: Allow
+            Action:
+              - ssm:StartSession
+              - ssm:SendCommand
+            Resource:
+              - !Sub arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*
+              - !Sub arn:${AWS::Partition}:ssm:*::document/AWS-*
+              - !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:document/SSM-SessionManagerRunShell
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+          - Sid: SsmOwnSession
+            Effect: Allow
+            Action:
+              - ssm:TerminateSession
+              - ssm:ResumeSession
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:session/${!aws:username}-*
+          - Sid: SsmRead
+            Effect: Allow
+            Action:
+              - ssm:DescribeInstanceInformation
+              - ssm:DescribeSessions
+              - ssm:GetConnectionStatus
+              - ssm:GetCommandInvocation
+              - ssm:ListCommands
+              - ssm:ListCommandInvocations
+            Resource: "*"
+          - Sid: StackSecrets
+            Effect: Allow
+            Action: secretsmanager:*
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:${Project}/*
+          - Sid: SecretsRead
+            Effect: Allow
+            Action:
+              - secretsmanager:ListSecrets
+              - secretsmanager:GetRandomPassword
+            Resource: "*"
+          - Sid: Bedrock
+            Effect: Allow
+            Action:
+              - bedrock:*
+              - bedrock-mantle:*
+            Resource: "*"
+          # The first call of a model of another provider subscribes the account to it.
+          # The conditions are those of the AWS managed Bedrock policies.
+          - Sid: BedrockModelSubscription
+            Effect: Allow
+            Action:
+              - aws-marketplace:Subscribe
+              - aws-marketplace:ViewSubscriptions
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:CalledViaLast:
+                  - bedrock.amazonaws.com
+                  - bedrock-mantle.amazonaws.com
+          - Sid: IamRead
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:GetRolePolicy
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListRoleTags
+              - iam:ListInstanceProfilesForRole
+              - iam:GetInstanceProfile
+            Resource:
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-*
+              - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${Project}-*
+          # A role is made and gets a policy only when it carries the boundary.
+          - Sid: IamRoleWithBoundary
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-*
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Ref Boundary
+          - Sid: IamRole
+            Effect: Allow
+            Action:
+              - iam:DeleteRole
+              - iam:UpdateRole
+              - iam:UpdateRoleDescription
+              - iam:UpdateAssumeRolePolicy
+              - iam:TagRole
+              - iam:UntagRole
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-*
+          - Sid: IamInstanceProfile
+            Effect: Allow
+            Action:
+              - iam:CreateInstanceProfile
+              - iam:DeleteInstanceProfile
+              - iam:AddRoleToInstanceProfile
+              - iam:RemoveRoleFromInstanceProfile
+              - iam:TagInstanceProfile
+              - iam:UntagInstanceProfile
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/${Project}-*
+          - Sid: IamPassRoleToEc2
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: ec2.amazonaws.com
+
+  # A separate policy keeps each managed policy below the IAM size limit.
+  OperationsPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-operations-provisioner
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: BucketCreate
+            Effect: Allow
+            Action: s3:CreateBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::${Project}-*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+              StringEqualsIfExists:
+                # The global S3 endpoint uses no location for us-east-1.
+                s3:LocationConstraint: [!Ref AWS::Region, ""]
+          - Sid: BucketConfiguration
+            Effect: Allow
+            Action:
+              - s3:DeleteBucket
+              - s3:ListBucket
+              - s3:GetBucketLocation
+              - s3:GetBucketAcl
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:GetEncryptionConfiguration
+              - s3:PutEncryptionConfiguration
+              - s3:GetBucketPublicAccessBlock
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetBucketTagging
+              - s3:PutBucketTagging
+              - s3:GetBucketVersioning
+              - s3:PutBucketVersioning
+              - s3:GetLifecycleConfiguration
+              - s3:PutLifecycleConfiguration
+            Resource: !Sub arn:${AWS::Partition}:s3:::${Project}-*
+            Condition:
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+          - Sid: DlmCreate
+            Effect: Allow
+            Action: dlm:CreateLifecyclePolicy
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                aws:RequestTag/Project: !Ref Project
+          - Sid: DlmPolicy
+            Effect: Allow
+            Action:
+              - dlm:GetLifecyclePolicy
+              - dlm:UpdateLifecyclePolicy
+              - dlm:DeleteLifecyclePolicy
+              - dlm:ListTagsForResource
+            Resource: !Sub arn:${AWS::Partition}:dlm:*:${AWS::AccountId}:policy/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                aws:ResourceTag/Project: !Ref Project
+          - Sid: DlmTags
+            Effect: Allow
+            Action: dlm:TagResource
+            Resource: !Sub arn:${AWS::Partition}:dlm:*:${AWS::AccountId}:policy/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                aws:ResourceTag/Project: !Ref Project
+              StringEqualsIfExists:
+                aws:RequestTag/Project: !Ref Project
+          - Sid: DlmUntag
+            Effect: Allow
+            Action: dlm:UntagResource
+            Resource: !Sub arn:${AWS::Partition}:dlm:*:${AWS::AccountId}:policy/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                aws:ResourceTag/Project: !Ref Project
+              ForAllValues:StringNotEquals:
+                aws:TagKeys: [Project]
+          - Sid: PassSnapshotRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt SnapshotRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: dlm.amazonaws.com
+          - Sid: HostLogGroup
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:PutRetentionPolicy
+              - logs:DeleteRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+              - logs:ListTagsForResource
+              - logs:TagLogGroup
+              - logs:UntagLogGroup
+              - logs:ListTagsLogGroup
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/${Project}/host
+              - !Sub arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/${Project}/host:*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+          - Sid: LogGroupDiscovery
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: "*"
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+          - Sid: BillingAlarm
+            Effect: Allow
+            Action: [cloudwatch:PutMetricAlarm, cloudwatch:DescribeAlarms, cloudwatch:DeleteAlarms]
+            Resource: !Sub arn:${AWS::Partition}:cloudwatch:us-east-1:${AWS::AccountId}:alarm:${Project}-billing
+          - Sid: BillingTopic
+            Effect: Allow
+            Action:
+              - sns:CreateTopic
+              - sns:DeleteTopic
+              - sns:GetTopicAttributes
+              - sns:SetTopicAttributes
+              - sns:TagResource
+              - sns:UntagResource
+              - sns:ListTagsForResource
+              - sns:Subscribe
+              - sns:Unsubscribe
+              - sns:GetSubscriptionAttributes
+              - sns:SetSubscriptionAttributes
+              - sns:ListSubscriptionsByTopic
+            Resource: !Sub arn:${AWS::Partition}:sns:us-east-1:${AWS::AccountId}:${Project}-alarm
+
+  Provisioner:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${Project}-provisioner
+      ManagedPolicyArns:
+        - !Ref ProvisionerPolicy
+        - !Ref OperationsPolicy
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+
+Outputs:
+  UserName:
+    Description: The IAM user of the provisioner.
+    Value: !Ref Provisioner
+  BoundaryArn:
+    Description: The value of PermissionsBoundary for each role of the stack.
+    Value: !Ref Boundary
+  SnapshotRoleArn:
+    Description: The administrator-owned execution role for the daily snapshot policy.
+    Value: !GetAtt SnapshotRole.Arn

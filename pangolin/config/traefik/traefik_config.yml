@@ -1,0 +1,83 @@
+# Traefik static configuration of the edge. This file is a source: it holds references
+# to environment names. `scripts/render-pangolin.sh` writes the rendered file into the
+# Traefik directory of the data volume. Traefik does not expand an environment name in
+# its static file.
+# Upstream: https://docs.pangolin.net/self-host/manual/docker-compose
+api:
+  insecure: false
+  dashboard: false
+
+providers:
+  # The route of each resource comes from Pangolin.
+  http:
+    endpoint: "http://pangolin:3001/api/v1/traefik-config"
+    pollInterval: "5s"
+  # The routes of the dashboard.
+  file:
+    filename: "/etc/traefik/dynamic_config.yml"
+
+experimental:
+  plugins:
+    badger:
+      moduleName: "github.com/fosrl/badger"
+      version: "v1.7.0"
+
+log:
+  level: "INFO"
+  format: "common"
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # The DNS-01 challenge through Porkbun. The provider reads PORKBUN_API_KEY and
+      # PORKBUN_SECRET_API_KEY from the container environment (compose.pangolin.yaml).
+      dnsChallenge:
+        provider: "porkbun"
+      email: "${EC2_ACME_EMAIL}"
+      storage: "/letsencrypt/acme.json"
+      caServer: "https://acme-v02.api.letsencrypt.org/directory"
+
+entryPoints:
+  # Port 80 serves only the redirect to HTTPS. No challenge uses it.
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: "websecure"
+          scheme: "https"
+  websecure:
+    address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: "30m"
+    http:
+      tls:
+        certResolver: "letsencrypt"
+        # One certificate for the domain subtree and each name one level below it.
+        domains:
+          - main: "${EC2_DOMAIN}"
+            sans:
+              - "*.${EC2_DOMAIN}"
+      # Traefik refuses a path that holds one of these encoded characters. Traefik 3.7
+      # allows each of them when its option is absent, so each option is `false` here.
+      # No resource of the host needs one, and a path rule of a resource is weaker when
+      # the proxy passes them.
+      encodedCharacters:
+        allowEncodedSlash: false
+        allowEncodedBackSlash: false
+        allowEncodedNullCharacter: false
+        allowEncodedSemicolon: false
+        allowEncodedPercent: false
+        allowEncodedQuestionMark: false
+        allowEncodedHash: false
+  # The health check of the container. Loopback only: the port is not published.
+  ping:
+    address: "127.0.0.1:8082"
+
+# No `serversTransport` block: Traefik checks the certificate of each HTTPS target. Each
+# target of the host uses HTTP on a Compose network. An HTTPS target of a site needs a
+# transport with the CA of that target, not a switch that turns the check off.
+
+ping:
+  entryPoint: "ping"

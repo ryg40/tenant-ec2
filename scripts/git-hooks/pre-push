@@ -1,0 +1,116 @@
+#!/bin/sh
+# pre-push: limit the refs that leave, then scan the commits that the push
+# sends with scripts/scan.sh.
+# Install with scripts/install-hooks.sh. See docs/secret-handling.md.
+#
+# The remote origin is the private development remote: each ref can go to it.
+# Each other remote, and a push to a URL, is a snapshot remote. It gets only:
+#   refs/heads/portable, portable-* or portable/*  -> the snapshot branch of
+#                                                     the remote
+#   refs/tags/portable/*                           -> the same tag name
+# The snapshot branch of the remote is main. Another name is one setting:
+#   git config remote.<name>.portableBranch <branch>
+# scripts/publish_portable.py reads the same setting. The local names are the
+# names that its option --branch accepts.
+# The hook refuses the whole push when one ref is outside this list, also a
+# delete. So the development branch and its history never reach a snapshot
+# remote, also with --all, --tags, --follow-tags or --mirror. A push of
+# portable to a remote branch portable is refused too: --all would make it.
+#
+# A secret or a policy finding refuses the push. A host value refuses each
+# push to a snapshot remote (level fail). Toward origin it refuses a push of
+# the branch portable or of a tag portable/*, and a push to a remote ref with
+# such a name; for other refs it prints a warning. The level does not change
+# the range: also for a portable ref the scan covers the commits that the
+# remote does not have.
+
+set -eu
+
+remote=$1
+top=$(git rev-parse --show-toplevel)
+scan=$top/scripts/scan.sh
+
+# The ref limit needs no scanner, so it runs first and on each branch.
+input=$(cat)
+refused=0
+level=
+if [ "$remote" != origin ]; then
+    # Each ref that passes the limit is a publication.
+    level=fail
+    target=$(git config --get "remote.$remote.portableBranch" 2>/dev/null || true)
+    target=${target:-main}
+    if ! git check-ref-format "refs/heads/$target" 2>/dev/null; then
+        echo "pre-push: refused: remote.$remote.portableBranch is not a branch name" >&2
+        exit 1
+    fi
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        [ -n "$local_ref" ] || continue
+        case "$local_ref $remote_ref" in
+            refs/heads/portable\ *|refs/heads/portable-?*\ *|refs/heads/portable/?*\ *)
+                [ "$remote_ref" = "refs/heads/$target" ] || {
+                    echo "pre-push: refused: $local_ref -> $remote_ref; the snapshot branch of $remote is $target" >&2
+                    refused=1
+                } ;;
+            refs/tags/portable/?*\ refs/tags/portable/?*)
+                [ "$local_ref" = "$remote_ref" ] || {
+                    echo "pre-push: refused: $local_ref -> $remote_ref changes the tag name" >&2
+                    refused=1
+                } ;;
+            *)
+                echo "pre-push: refused: $local_ref -> $remote_ref is not a snapshot ref" >&2
+                refused=1 ;;
+        esac
+    done <<EOT
+$input
+EOT
+    if [ "$refused" -ne 0 ]; then
+        echo "pre-push: only the branch portable and the tags portable/* go to a remote other than origin (docs/remotes.md)" >&2
+        echo "pre-push: the branch goes to the remote branch $target (git config remote.$remote.portableBranch)" >&2
+        exit 1
+    fi
+fi
+
+if [ ! -f "$scan" ]; then
+    # Fail closed: the script is gone from the working tree, but the branch has it.
+    if git cat-file -e :scripts/scan.sh 2>/dev/null || git cat-file -e HEAD:scripts/scan.sh 2>/dev/null; then
+        echo "pre-push: scripts/scan.sh is not in the working tree, but it is in the index or in HEAD; push refused" >&2
+        exit 1
+    fi
+    echo "pre-push: scripts/scan.sh is not on this branch (not in the working tree, the index or HEAD); no scan" >&2
+    exit 0
+fi
+
+status=0
+# Git writes one line for each ref: <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "$local_ref" ] || continue
+    case $local_sha in *[!0]*) ;; *) continue ;; esac # a delete sends no commit
+    if case $remote_sha in *[!0]*) false ;; *) true ;; esac ||
+        ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        # A new ref, or the remote commit is not here: the commits that no
+        # remote-tracking ref of this remote contains. Git gives the hook no
+        # list of the remote commits, so the range is as current as the last
+        # fetch or push. With no remote-tracking ref of this remote (a new
+        # remote, or a push to a URL), the range is all of the history of the
+        # ref. A URL can hold a blank, so it must not go into the range.
+        if [ -n "$(git for-each-ref --count=1 "refs/remotes/$remote/")" ]; then
+            range="$local_sha --not --remotes=$remote"
+        else
+            range=$local_sha
+            case "$level $local_ref $remote_ref" in
+                fail\ *|*\ refs/heads/portable\ *|*\ refs/heads/portable|*refs/tags/portable/*)
+                    # A first publication of a portable ref must be clean in all of its history.
+                    echo "pre-push: no remote-tracking ref of $remote; scan all of the history of $local_ref" >&2 ;;
+            esac
+        fi
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    echo "pre-push: scan $local_ref -> $remote_ref" >&2
+    SCAN_REF="$local_ref $remote_ref" sh "$scan" ${level:+--level "$level"} history "$range" </dev/null || status=1
+done <<EOT
+$input
+EOT
+
+[ "$status" -eq 0 ] || echo "pre-push: push refused (docs/secret-handling.md)" >&2
+exit "$status"

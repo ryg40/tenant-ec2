@@ -1,0 +1,472 @@
+{
+  "meta": {
+    "title": "02 / Core services",
+    "subtitle": "compose.yaml + compose.caddy.yaml / only the edge publishes ports.",
+    "summary": "compose.yaml + compose.caddy.yaml / only the edge publishes ports.",
+    "snapshot": "Merged source files. No live deployment.",
+    "walkNote": "Arrows show calls or dependencies, not live checks.",
+    "exportBase": "diagram",
+    "sources": []
+  },
+  "categories": [
+    {
+      "id": "aws",
+      "label": "aws",
+      "color": "#285b88"
+    },
+    {
+      "id": "service",
+      "label": "service",
+      "color": "#176b5b"
+    },
+    {
+      "id": "data",
+      "label": "data",
+      "color": "#94601d"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "external",
+      "label": "external",
+      "color": "#52616b"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "core",
+      "label": "Core",
+      "meaning": "The portable core.",
+      "line": "solid"
+    },
+    {
+      "id": "option",
+      "label": "Option",
+      "meaning": "Off until the installer selects it.",
+      "line": "dashed"
+    }
+  ],
+  "edgeKinds": [
+    {
+      "id": "flow",
+      "label": "Call or dependency",
+      "color": "#52616b"
+    }
+  ],
+  "callTypes": [],
+  "systems": [
+    {
+      "id": "core",
+      "label": "EC2 / Docker Compose",
+      "color": "#176b5b"
+    },
+    {
+      "id": "outside",
+      "label": "External",
+      "color": "#52616b"
+    }
+  ],
+  "groups": [],
+  "nodes": [
+    {
+      "id": "caddy",
+      "system": "core",
+      "x": 40,
+      "y": 160,
+      "w": 330,
+      "h": 130,
+      "label": "caddy / edge-core\nTCP 80 / 443\nEBS: certificate state",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "system": "core",
+      "x": 640,
+      "y": 160,
+      "w": 330,
+      "h": 130,
+      "label": "ok-auth / oauth2-proxy\nHTTP 4180\nEntra ID group check",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "ok",
+      "system": "core",
+      "x": 1240,
+      "y": 160,
+      "w": 350,
+      "h": 130,
+      "label": "open-knowledge\nHTTP 80 / no login here\nEFS: open-knowledge, shared",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "system": "core",
+      "x": 40,
+      "y": 670,
+      "w": 330,
+      "h": 130,
+      "label": "pi-durable / basic agent\nHTTP 5470 / no web search\nEBS: state / EFS: shared",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "ov",
+      "system": "core",
+      "x": 640,
+      "y": 670,
+      "w": 330,
+      "h": 130,
+      "label": "openviking\nHTTP 1933 / bot off\nEFS: openviking, shared",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "system": "core",
+      "x": 1240,
+      "y": 670,
+      "w": 350,
+      "h": 130,
+      "label": "litellm / gateway\nHTTP 4000\nbedrock/luna + bedrock/embed",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "system": "core",
+      "x": 1240,
+      "y": 1040,
+      "w": 350,
+      "h": 130,
+      "label": "litellm-db / Postgres\nTCP 5432\nEBS: database",
+      "category": "data",
+      "status": "core",
+      "kind": "data",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "entra",
+      "system": "outside",
+      "x": 1880,
+      "y": 160,
+      "w": 320,
+      "h": 130,
+      "label": "Microsoft Entra ID\nOne tenant / allowed group\nBrowser login",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    },
+    {
+      "id": "bedrock",
+      "system": "outside",
+      "x": 1880,
+      "y": 670,
+      "w": 320,
+      "h": 130,
+      "label": "Bedrock\nGPT-6 Luna / xhigh\nTitan v2 / 1024 dimensions",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-auth",
+      "from": "caddy",
+      "to": "auth",
+      "label": "edge-ok",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          460,
+          201
+        ]
+      }
+    },
+    {
+      "id": "auth-ok",
+      "from": "auth",
+      "to": "ok",
+      "label": "knowledge",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1040,
+          201
+        ]
+      }
+    },
+    {
+      "id": "agent-ov",
+      "from": "agent",
+      "to": "ov",
+      "label": "memory / user key",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          420,
+          711
+        ]
+      }
+    },
+    {
+      "id": "ov-llm",
+      "from": "ov",
+      "to": "llm",
+      "label": "llm / virtual key",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1020,
+          711
+        ]
+      }
+    },
+    {
+      "id": "agent-llm",
+      "from": "agent",
+      "to": "llm",
+      "label": "llm / virtual key",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "bottom"
+        ],
+        "fromT": 0.5,
+        "toT": 0.2
+      },
+      "export": {
+        "via": [
+          [
+            205,
+            930
+          ],
+          [
+            1310,
+            930
+          ]
+        ],
+        "labelAt": [
+          700,
+          900
+        ]
+      }
+    },
+    {
+      "id": "llm-db",
+      "from": "llm",
+      "to": "db",
+      "label": "db",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1430,
+          919
+        ]
+      }
+    },
+    {
+      "id": "llm-bedrock",
+      "from": "llm",
+      "to": "bedrock",
+      "label": "egress / instance role",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1630,
+          711
+        ]
+      }
+    },
+    {
+      "id": "agent-ok",
+      "from": "agent",
+      "to": "ok",
+      "label": "knowledge-agent / direct call",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "top",
+          "bottom"
+        ],
+        "fromT": 0.5,
+        "toT": 0.8
+      },
+      "export": {
+        "via": [
+          [
+            205,
+            495
+          ],
+          [
+            1520,
+            495
+          ]
+        ],
+        "labelAt": [
+          660,
+          465
+        ]
+      }
+    },
+    {
+      "id": "auth-entra",
+      "from": "auth",
+      "to": "entra",
+      "label": "gate-egress / OIDC",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "top",
+          "top"
+        ]
+      },
+      "export": {
+        "via": [
+          [
+            805,
+            55
+          ],
+          [
+            2040,
+            55
+          ]
+        ],
+        "labelAt": [
+          1400,
+          22
+        ]
+      }
+    }
+  ],
+  "scenarios": [],
+  "export": {
+    "stem": "02-services",
+    "notes": [
+      "Default public name: ok.<domain>. Caddy targets ok-auth, never open-knowledge.",
+      "Optional names: agent / llm / ov use edge-agent / edge-llm / edge-ov, AdminCidr and each service key.",
+      "Internal: db, llm, memory, knowledge, knowledge-agent and the four edge resource networks.",
+      "knowledge: gate + OpenKnowledge only. knowledge-agent: agent + OpenKnowledge only. OpenKnowledge uses port 80.",
+      "Gate networks: knowledge, gate-egress, edge-ok. edge-ok: 198.18.5.0/29, edge + gate only.",
+      "Internet routes: egress, gate-egress, edge-core. The gate is the only member of gate-egress.",
+      "The agent shares egress with the gateway, also with web search off.",
+      "Rendered core: 7 services / 12 networks. Copilot: 8 / 13. Pangolin: 9 / 12. Both options: 10 / 13.",
+      "The agent uses http://ok.<domain>/mcp, an internal alias. OpenKnowledge makes no model call.",
+      "Frames group related parts. Dashed component boxes mark options; all other component boxes mark the core."
+    ]
+  }
+}

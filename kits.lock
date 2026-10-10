@@ -1,0 +1,111 @@
+# The kit lock of tenant-ec2. YAML. See docs/reference/host-boot.md.
+# A server kit is pinned by source tag, source commit and the digest of its final image.
+# `source_repo` is a public repository that holds the tag at the commit. An empty value means
+# that no public repository holds the pin. Then the host names its source in `.env`
+# (EC2_KIT_SOURCE_<KIT>). The pin stays the same for each source.
+# An `image_digest` of a local build is its image id. On the host, the
+# bootstrap (`scripts/host-bootstrap.sh`) writes the id of each build into this file.
+# The pins name reviewed kit releases. A different source must provide the same pin.
+# No kit image is built yet, so each server kit has an empty `image_digest`.
+# `verify` describes standalone kit checks only; it is not executed by aws-host.sh.
+# The deployed stack uses scripts/verify-deployed.py with internal container endpoints.
+# OpenKnowledge's standalone smoke creates temporary containers, not deployment proof.
+version: 1
+
+server_kits:
+  litellm:
+    source_repo: https://github.com/ryg40/litellm-gateway.git
+    source_tag: portable-v0.4.1
+    source_commit: 4d1aefc2d1b50f5782f39d8eb8bc7116cc19dffb
+    # LiteLLM 1.103.0 at this tag (Dockerfile ARG LITELLM_VERSION).
+    image: litellm-gateway:1.103.0-p0.4.1
+    image_digest: ""
+    build: scripts/build.sh gateway
+    verify: python3 scripts/verify.py
+    service: litellm
+    # The same image runs the second service `copilot` (compose.copilot.yaml of the kit).
+  openviking:
+    source_repo: https://github.com/ryg40/openviking.git
+    source_tag: portable-v0.2.0
+    source_commit: 8f5f57a66a604ad4ba2050b9d81589fe3136389c
+    image: openviking:0.2.0-local
+    image_digest: ""
+    build: sh scripts/build.sh gateway
+    verify: python3 scripts/verify.py <url>
+    service: openviking
+  open-knowledge:
+    source_repo: https://github.com/ryg40/open-knowledge.git
+    source_tag: portable-v0.3.2
+    source_commit: eaec0029869e1e2c7be1de758547b45489aabaf4
+    # OpenKnowledge 0.83.2 at this tag (deploy/Dockerfile ARG OK_VERSION).
+    image: open-knowledge:0.83.2-p0.3.2
+    image_digest: ""
+    build: scripts/tenant/build.sh -v 0.83.2 -t open-knowledge:0.83.2-p0.3.2
+    verify: scripts/tenant/smoke.sh <image>
+    service: open-knowledge
+  pi-durable:
+    # The basic agent service of the pi-durable kit.
+    # The kit has no portable tag yet and no public repository. Set
+    # EC2_KIT_SOURCE_PI_DURABLE when its reviewed release is available.
+    source_repo: ""
+    source_tag: "" # release pending
+    source_commit: ""
+    image: pi-durable:1.0.0-p0.1.0
+    image_digest: ""
+    build: sh scripts/build.sh -t pi-durable:1.0.0-p0.1.0
+    # This standalone check waits for the source pin. It runs with a model stand-in.
+    verify: sh scripts/verify.sh pi-durable:1.0.0-p0.1.0
+    service: pi-durable
+
+# Images that are not kits. Each image has a tag and an image index digest.
+support_images:
+  postgres:
+    # The image index on 2026-10-10 holds Postgres 16.15. The tag postgres:16 moves
+    # with each minor release. To renew the pin, run `docker buildx imagetools inspect
+    # postgres:16` and write the tag and the digest here and in compose.yaml.
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    image_digest: sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    service: litellm-db
+  pangolin:
+    # The optional Pangolin edge. The digest pins the image index on 2026-10-10.
+    # To renew the pin, run `docker buildx imagetools inspect
+    # docker.io/fosrl/pangolin:1.24.0` and write the tag and the digest here and in compose.pangolin.yaml.
+    image: docker.io/fosrl/pangolin:1.24.0@sha256:17774ddbb4bf13f4a2b9e813cc2dfc3ca8ded1c5745823624af632bab0376488
+    image_digest: sha256:17774ddbb4bf13f4a2b9e813cc2dfc3ca8ded1c5745823624af632bab0376488
+    service: pangolin
+  gerbil:
+    # The digest pins the image index on 2026-10-10. To renew the pin, run
+    # `docker buildx imagetools inspect docker.io/fosrl/gerbil:1.5.2` and write the tag
+    # and the digest here and in compose.pangolin.yaml.
+    image: docker.io/fosrl/gerbil:1.5.2@sha256:1f6e64eaba7997282c7067ba19922fc7e46b5f73e1a27add3dd66a591d50512f
+    image_digest: sha256:1f6e64eaba7997282c7067ba19922fc7e46b5f73e1a27add3dd66a591d50512f
+    service: gerbil
+  traefik:
+    # The digest pins the image index on 2026-10-10. To renew the pin, run
+    # `docker buildx imagetools inspect docker.io/traefik:v3.7` and write the tag
+    # and the digest here and in compose.pangolin.yaml.
+    image: docker.io/traefik:v3.7@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    image_digest: sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    service: traefik
+    # Badger plugin v1.7.0 (Traefik static configuration).
+  oauth2-proxy:
+    # The Entra ID gate in front of OpenKnowledge (docs/entra.md). oauth2-proxy 7.15.5 of
+    # 2026-10-01. Its release notes name three advisories that it corrects, two of them
+    # critical: GHSA-63jm-59jj-478j, GHSA-wr5q-7wxw-x568 and GHSA-hhqp-vx7f-5c6m. Do not go
+    # back to an earlier release.
+    # The tag is the Alpine variant: the default image has no shell and no tool, so a
+    # container of it cannot run a health check. The image has no user: compose.yaml sets
+    # one. The digest is the digest of the image index of the tag on 2026-10-09. To renew the
+    # pin, run `docker buildx imagetools inspect <image>` and write the tag and the digest
+    # here and in compose.yaml.
+    # `image` is the same text as the `image` line of compose.yaml, with the digest.
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine@sha256:8e4bec4f9fe4de10de63070209204075e4407503170aa19893d6e8d99f083d1b
+    image_digest: sha256:8e4bec4f9fe4de10de63070209204075e4407503170aa19893d6e8d99f083d1b
+    service: ok-auth
+  caddy:
+    # The core edge (compose.caddy.yaml). Pinned by version and digest: the digest of the
+    # image index on 2026-10-09. To renew the pin, run `docker buildx imagetools inspect
+    # caddy:<version>` and write the version and the digest here and in compose.caddy.yaml.
+    image: caddy:2.11.7
+    image_digest: "sha256:f2a1290d0463aad60660d4ec134943f183ee2a5f6c3eb7bf32dd984f2f020772"
+    service: caddy

@@ -1,0 +1,30 @@
+# The public name `llm`: the gateway, for the range of the administrator only.
+# The edge serves the five model paths and no other path: the gateway checks
+# its own virtual keys there. The UI, the login routes and the admin API of the
+# gateway have no route from the edge.
+# A path rule matches one path only, with each letter case. The service gets
+# the path of the rule, not the text of the client.
+(model-path) {
+	handle {args[0]} {
+		rewrite * {args[0]}
+		reverse_proxy litellm:4000
+	}
+}
+
+llm.{$EC2_DOMAIN} {
+	import public-name
+	@admin remote_ip {$EC2_ADMIN_CIDR}
+	handle @admin {
+		import model-path /v1/chat/completions
+		import model-path /v1/responses
+		import model-path /v1/embeddings
+		import model-path /v1/models
+		import model-path /v1/messages
+		handle {
+			respond 404
+		}
+	}
+	handle {
+		respond 403
+	}
+}

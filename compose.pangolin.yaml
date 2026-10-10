@@ -1,0 +1,217 @@
+# tenant-ec2: the option `pangolin` of the Compose stack. The Pangolin edge, in place of
+# the core edge (compose.caddy.yaml): Pangolin, Gerbil and Traefik.
+#
+# This file is an overlay. It is a valid model only together with compose.yaml:
+#   docker compose -f compose.yaml -f compose.pangolin.yaml ...
+# The bootstrap puts it into `COMPOSE_FILE` when `EC2_OPTIONS` holds `pangolin`. Never
+# load it together with compose.caddy.yaml: the two edges publish the same ports.
+#
+# Ports: only `gerbil` publishes ports (80, 443, 51820/udp, 21820/udp). `traefik` runs in
+# the network namespace of `gerbil`, so it listens on 80 and 443 of that namespace. No
+# other service has a `ports:` entry.
+#
+# Networks:
+#
+#   Service          Networks
+#   pangolin         edge-core
+#   gerbil, traefik  edge-core, edge-llm, edge-ok, edge-ov, edge-agent
+#
+# - A service that is a resource shares one small network with `gerbil`, and so with
+#   Traefik. It is on no network with `pangolin`, so it does not reach the internal API
+#   of Pangolin on port 3001. The API of Gerbil on port 3004 listens only on the address
+#   of `gerbil` on `edge-core` (see the service `gerbil`).
+# - `edge-core` has a route to the internet. The metadata guard of the host closes the
+#   instance metadata address for its members (`scripts/host-metadata-guard.sh`).
+#
+# Resources: `EC2_EDGE_NAMES` says which resources of the blueprint are on
+# (`scripts/render-pangolin.sh`). The dashboard at `pangolin.` below `EC2_DOMAIN` is on
+# with each list.
+#
+# Hardening: each service drops each capability and sets `no-new-privileges`. `gerbil`
+# gets `NET_ADMIN` back for the WireGuard interface, and nothing else.
+#
+# Storage: each directory is on the data volume. `scripts/render-pangolin.sh` makes the
+# three, and their owner is root:
+#   /srv/data/pangolin/config, /srv/data/pangolin/gerbil, /srv/data/pangolin/traefik
+#
+# Variables: the names of this file are in the block "Option pangolin" of `.env.example`.
+# The two Porkbun names are in the block "DNS provider porkbun": Traefik gets its
+# wildcard certificate from a DNS-01 challenge through Porkbun, so this option needs
+# the provider `porkbun` today. A missing value stops Compose only when this file is on.
+#
+# Images: the tags of `kits.lock`.
+
+services:
+  # Pangolin: the dashboard, the API and the source of the Traefik routes.
+  # Its configuration and its SQLite database live in its own directory of the data
+  # volume. No other service mounts that directory.
+  # `scripts/render-pangolin.sh` writes `config.yml` there from `pangolin/config/`.
+  # Pangolin reads the server secret from the environment, so the rendered file holds none.
+  pangolin:
+    # kits.lock: support_images.pangolin.
+    image: docker.io/fosrl/pangolin:1.24.0@sha256:17774ddbb4bf13f4a2b9e813cc2dfc3ca8ded1c5745823624af632bab0376488
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      SERVER_SECRET: ${EC2_PANGOLIN_SERVER_SECRET:?add a value to .env (.env.example)}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/data/pangolin/config
+        target: /app/config
+        bind: { create_host_path: false }
+    networks:
+      - edge-core
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  # Gerbil: the WireGuard end of each tunnel. It owns the four public ports of the host.
+  # Its directory of the data volume holds its key file and nothing else.
+  #
+  # Capabilities: `NET_ADMIN` only. Gerbil makes the WireGuard interface and its firewall
+  # rules through netlink, and both need this one capability. It has no `SYS_MODULE`: the
+  # boot of the host must load the kernel module `wireguard` before the first start.
+  #
+  # The API of Gerbil has no authentication: a POST to `/peer` adds a WireGuard peer.
+  # Gerbil shares a network with each resource, so its API must not listen on each
+  # address. `--listen` names the alias `gerbil-core`. Only `edge-core` has that alias,
+  # so the API listens on one address, and only `pangolin` is on that network.
+  # A resource service has no capability, so it cannot make a route to that address.
+  gerbil:
+    # kits.lock: support_images.gerbil.
+    image: docker.io/fosrl/gerbil:1.5.2@sha256:1f6e64eaba7997282c7067ba19922fc7e46b5f73e1a27add3dd66a591d50512f
+    restart: unless-stopped
+    depends_on:
+      pangolin:
+        condition: service_healthy
+    command:
+      - --reachableAt=http://gerbil-core:3004
+      - --listen=gerbil-core:3004
+      - --generateAndSaveKeyTo=/var/config/key
+      - --remoteConfig=http://pangolin:3001/api/v1/
+    volumes:
+      - type: bind
+        source: /srv/data/pangolin/gerbil
+        target: /var/config
+        bind: { create_host_path: false }
+    cap_drop: [ALL]
+    cap_add:
+      - NET_ADMIN
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "51820:51820/udp"
+      - "21820:21820/udp"
+      - "443:443"
+      - "80:80"
+    networks:
+      # The published ports and the route to the internet are on `edge-core`: it is the
+      # only network of this service that is not internal.
+      edge-core:
+        aliases:
+          - gerbil-core
+      edge-llm: {}
+      edge-ok: {}
+      edge-ov: {}
+      edge-agent: {}
+    healthcheck:
+      # The API does not listen on the loopback address.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://gerbil-core:3004/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Traefik: ends TLS for each resource with one wildcard certificate from the DNS-01
+  # challenge. It shares the network namespace of `gerbil`, so it has no network entry
+  # and no port entry of its own. The two Porkbun names are the names that the DNS
+  # provider of Traefik reads.
+  # Its directory of the data volume has two parts: the two rendered files, read-only,
+  # and the certificate store. `pangolin` and `gerbil` do not mount it. It mounts no
+  # Docker socket.
+  # It has no capability. Docker lets each user bind a port below 1024 in the network
+  # namespace of a container, so Traefik needs no `NET_BIND_SERVICE` for 80 and 443.
+  traefik:
+    # kits.lock: support_images.traefik. The Badger plugin version is in the static file.
+    image: docker.io/traefik:v3.7@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    restart: unless-stopped
+    network_mode: service:gerbil
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      pangolin:
+        condition: service_healthy
+      gerbil:
+        condition: service_started
+    command:
+      - --configFile=/etc/traefik/traefik_config.yml
+    environment:
+      PORKBUN_API_KEY: ${EC2_PORKBUN_API_KEY:?add a value to .env (.env.example)}
+      PORKBUN_SECRET_API_KEY: ${EC2_PORKBUN_SECRET_KEY:?add a value to .env (.env.example)}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/data/pangolin/traefik/config
+        target: /etc/traefik
+        read_only: true
+        bind: { create_host_path: false }
+      # The certificate store `acme.json`. It outlives the instance with the data volume.
+      - type: bind
+        source: /srv/data/pangolin/traefik/letsencrypt
+        target: /letsencrypt
+        bind: { create_host_path: false }
+    healthcheck:
+      # Reads the `ping` entry point of the static file.
+      test: ["CMD", "traefik", "healthcheck", "--configFile=/etc/traefik/traefik_config.yml"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ===== The services of the core that have a public name =====
+  # Each one joins its edge network. Compose adds the network to the networks that
+  # compose.yaml gives the service.
+
+  litellm:
+    networks:
+      edge-llm: {}
+
+  # The gate is the only target of the name `ok`. OpenKnowledge joins no edge network.
+  ok-auth:
+    networks:
+      edge-ok: {}
+
+  openviking:
+    networks:
+      edge-ov: {}
+
+  pi-durable:
+    networks:
+      edge-agent: {}
+
+networks:
+  # The edge networks. An edge file gives them, so the core has no network with an edge.
+  # The edge: the published ports and the route to the internet. It is not internal.
+  # Pangolin and Gerbil, and so Traefik: `gerbil` publishes the four ports through it, and
+  # Traefik reaches the certificate authority, the DNS provider and the source of its
+  # plugin through it.
+  edge-core:
+  # One network for each service that has a public name: the edge and the one service.
+  edge-llm:
+    internal: true
+  # The range of `edge-ok` is fixed: the gate reads a forwarded header only from a
+  # member of this range (`trusted_proxy_ips` of ok-auth/oauth2-proxy.cfg), and the edge
+  # is the only other member. Keep the range equal in the two edge files and in that
+  # file. It is a part of 198.18.0.0/15, as the range of the network `egress`.
+  edge-ok:
+    internal: true
+    ipam:
+      config:
+        - subnet: 198.18.5.0/29
+  edge-ov:
+    internal: true
+  edge-agent:
+    internal: true

@@ -1,0 +1,66 @@
+# Pangolin server configuration of the host. This file is a source: it holds references
+# to environment names, not values. `scripts/render-pangolin.sh` writes the rendered
+# file into the Pangolin directory of the data volume.
+# Pangolin does not expand an environment name in this file. It reads one value from the
+# container environment: the server secret (SERVER_SECRET in compose.pangolin.yaml). So
+# `server.secret` is not here.
+# Reference: https://docs.pangolin.net/self-host/advanced/config-file
+gerbil:
+    start_port: 51820
+    clients_start_port: 21820
+    # The public address of the host for each tunnel: the Elastic IP, or a name that has
+    # an A record to it. With no value the render script uses the dashboard name.
+    base_endpoint: "${EC2_GERBIL_BASE_ENDPOINT}"
+
+app:
+    dashboard_url: "https://pangolin.${EC2_DOMAIN}"
+    log_level: "info"
+    save_logs: false
+    log_failed_attempts: true
+    telemetry:
+        anonymous_usage: false
+
+domains:
+    domain1:
+        # The domain subtree. Each resource has its name below it.
+        base_domain: "${EC2_DOMAIN}"
+        cert_resolver: "letsencrypt"
+        # Each resource route asks for the wildcard certificate, not for its own one.
+        prefer_wildcard_cert: true
+
+server:
+    # Traefik is the only proxy in front of Pangolin on the host.
+    trust_proxy: 1
+    # A login of the dashboard ends after one working day. The default is 720 hours.
+    dashboard_session_length_hours: 8
+    cors:
+        origins: ["https://pangolin.${EC2_DOMAIN}"]
+        methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
+        allowed_headers: ["X-CSRF-Token", "Content-Type"]
+        credentials: false
+
+traefik:
+    cert_resolver: "letsencrypt"
+    http_entrypoint: "web"
+    https_entrypoint: "websecure"
+    prefer_wildcard_cert: true
+
+rate_limits:
+    # The login routes (`/api/v1/auth/`): 20 requests in one minute for one client address
+    # and one path. The default is 500. One person signs in to the dashboard, and Newt
+    # asks for one token at each connection, so a low number costs nothing.
+    auth:
+        window_minutes: 1
+        max_requests: 20
+
+flags:
+    require_email_verification: false
+    disable_signup_without_invite: true
+    disable_user_create_org: true
+    # No resource of the host is a raw TCP or UDP resource, and no other port is public.
+    allow_raw_resources: false
+    # The integration API, on port 3003 of the container. A script applies
+    # `pangolin/blueprint.yaml` through it. The port is private: compose.pangolin.yaml
+    # publishes no port of this service, no route of Traefik names the port, and only `gerbil` is
+    # on a network with this service. A request needs an API key of Pangolin.
+    enable_integration_api: true

@@ -1,0 +1,161 @@
+# The blueprint of the host: each resource of the edge and its target.
+# This file is a source: it holds references to environment names.
+# `scripts/render-pangolin.sh` writes the rendered file beside the three edge directories
+# of the data volume. No container mounts it.
+# Format: https://docs.pangolin.net/manage/blueprints
+#
+# How the file is applied: Pangolin 1.24.0 does not read a blueprint file by itself. The
+# bootstrap applies the rendered file through the integration API of Pangolin, after
+# the first setup of Pangolin (the bootstrap ticket):
+#   PUT http://pangolin:3003/v1/org/<organization>/blueprint
+#   Body: {"blueprint": "<the rendered file as JSON text, in base64>"}
+#   Authorization: an API key of Pangolin with the permission to apply a blueprint.
+# `flags.enable_integration_api` of `pangolin/config/config.yml` starts that API. Port
+# 3003 is not published, and only `gerbil` is on a network with `pangolin`. So the
+# request comes from the network namespace of `pangolin` or of `gerbil`, for example
+# with `docker compose exec`.
+# A second apply gives the same resources.
+# By hand: the page "Blueprints" in the settings of the organization applies the same
+# YAML text.
+#
+# The five names below the domain subtree:
+#
+#   pangolin   The dashboard and the API of Pangolin. Targets: pangolin:3002 (the pages)
+#              and pangolin:3000 (the API). The name has no entry under
+#              `public-resources`: `pangolin` cannot be a resource on the dashboard
+#              domain in Pangolin 1.24.0. Its resource API refuses that domain. Its
+#              routes are in `pangolin/config/traefik/dynamic_config.yml`, with an
+#              allow-list of the administrator address. Its login is the login of
+#              Pangolin.
+#   llm        The gateway. Target: litellm:4000.
+#   ok         OpenKnowledge behind its gate. Target: ok-auth:4180.
+#   ov         OpenViking. Target: openviking:1933.
+#   agent      The pi-durable agent. Target: pi-durable:5470.
+#
+# Site: each target is on the host itself. The site is a site of the type `local`: it has
+# no tunnel, and Traefik reaches the target by its service name on the one Compose
+# network that it shares with that service (compose.pangolin.yaml).
+# Make that site one time in the dashboard and give it the identifier of
+# EC2_PANGOLIN_SITE. An apply fails when no site has the identifier.
+#
+# Which resources are on: EC2_EDGE_NAMES of the environment file is the list of the
+# public names. `scripts/render-pangolin.sh` writes the line `enabled` of each resource
+# from it: `true` for a name of the list, `false` for each other name. The references
+# ${EDGE_OK}, ${EDGE_AGENT}, ${EDGE_LLM} and ${EDGE_OV} are these four values; they are
+# not names of the environment file. A resource that is off exists with its target, and
+# the edge does not serve it. The default list is `ok`.
+#
+# Login and rules: `auth.sso-enabled: true` makes each path of a resource ask for the
+# login of Pangolin. A rule changes that for one path. Pangolin reads the rules of a
+# resource in the order of `priority` and takes the first rule that matches:
+#   allow   The request passes with no login of Pangolin.
+#   deny    The request stops at the edge.
+#   pass    The request goes to the login.
+# A path value with no `*` matches that one path only. Pangolin decodes the path and
+# resolves each `..` before it compares.
+# - `ok` has no login of Pangolin (`auth.sso-enabled: false`). Its one target is the
+#   gate `ok-auth`, and the gate is its login. So each address reaches the gate, as on
+#   the core edge.
+# - `llm` asks for the login of Pangolin. Its five `allow` rules open the model paths:
+#   the gateway checks its own virtual keys there, for each address. Each other path of
+#   the gateway asks for the login of Pangolin: the UI at `/ui`, the login routes and
+#   the admin API (keys, users, models, settings). A client that needs one more path
+#   gets one more rule, one rule for each path.
+# - `ov` and `agent` ask for the login of Pangolin on each path. The login page is on
+#   the dashboard name, and only the range of EC2_ADMIN_CIDR reaches that name. A client
+#   that holds a key and no browser does not pass the login: the kit has no API rule
+#   set for the two names. Keep `auth.sso-enabled: true` on a resource that is off: a
+#   switch to "enabled" in the dashboard then does not open it.
+public-resources:
+  llm:
+    name: LiteLLM gateway
+    mode: http
+    full-domain: llm.${EC2_DOMAIN}
+    # On when EC2_EDGE_NAMES holds `llm`.
+    enabled: ${EDGE_LLM}
+    auth:
+      sso-enabled: true
+    # The model paths only. No rule for `/ui`, `/key`, `/user`, `/model`, `/sso` or `/`.
+    rules:
+      - action: allow
+        match: path
+        value: /v1/chat/completions
+        priority: 1
+      - action: allow
+        match: path
+        value: /v1/responses
+        priority: 2
+      - action: allow
+        match: path
+        value: /v1/embeddings
+        priority: 3
+      - action: allow
+        match: path
+        value: /v1/models
+        priority: 4
+      - action: allow
+        match: path
+        value: /v1/messages
+        priority: 5
+    targets:
+      - site: ${EC2_PANGOLIN_SITE}
+        hostname: litellm
+        port: 4000
+        method: http
+
+  ok:
+    name: OpenKnowledge
+    mode: http
+    full-domain: ok.${EC2_DOMAIN}
+    # On when EC2_EDGE_NAMES holds `ok`.
+    enabled: ${EDGE_OK}
+    # No login of Pangolin: the gate is the login of this resource.
+    auth:
+      sso-enabled: false
+    targets:
+      # The gate, on port 4180 with plain HTTP. It is the only target of the name `ok`.
+      - site: ${EC2_PANGOLIN_SITE}
+        hostname: ok-auth
+        port: 4180
+        method: http
+
+  ov:
+    name: OpenViking
+    mode: http
+    full-domain: ov.${EC2_DOMAIN}
+    # On when EC2_EDGE_NAMES holds `ov`.
+    enabled: ${EDGE_OV}
+    auth:
+      sso-enabled: true
+    targets:
+      - site: ${EC2_PANGOLIN_SITE}
+        hostname: openviking
+        port: 1933
+        method: http
+
+  agent:
+    name: pi-durable agent
+    mode: http
+    full-domain: agent.${EC2_DOMAIN}
+    # On when EC2_EDGE_NAMES holds `agent`.
+    enabled: ${EDGE_AGENT}
+    auth:
+      sso-enabled: true
+    # The agent answers `/healthz` and `/` with no bearer, and a call to `/healthz` can
+    # make a model request. So the edge stops both paths for each caller, also after a
+    # login. The health check of the container uses `/v1/` on the loopback address.
+    # Keep the two rules.
+    rules:
+      - action: deny
+        match: path
+        value: /healthz
+        priority: 1
+      - action: deny
+        match: path
+        value: /
+        priority: 2
+    targets:
+      - site: ${EC2_PANGOLIN_SITE}
+        hostname: pi-durable
+        port: 5470
+        method: http

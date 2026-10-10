@@ -1,0 +1,107 @@
+# Traefik dynamic configuration of the edge: the routes of the Pangolin dashboard at
+# `pangolin.` below the domain subtree. This file is a source: it holds references to
+# environment names. `scripts/render-pangolin.sh` writes the rendered file into the
+# Traefik directory of the data volume.
+# The route of each resource is not here: Pangolin gives it to Traefik through the HTTP
+# provider, from the resources of `pangolin/blueprint.yaml`.
+#
+# The four routers below serve the dashboard, the API and the WebSocket path of
+# Pangolin. Each one has the middleware `admin-allowlist` first: Traefik answers 403 to
+# a client address outside the one range of EC2_ADMIN_CIDR, before the login of
+# Pangolin. The first setup page and each login page of Pangolin are behind it too.
+# - Newt of the home site connects to the same name. Its public address must be in the
+#   range, so the range is the address of the home site.
+# - A login page of a resource is on the same name. A resource that asks for the login
+#   of Pangolin is thus open only to the range. A resource for another person needs a
+#   new decision on this list before it opens.
+# - The services of the stack do not use these routers: Traefik and the bootstrap call
+#   `pangolin` on its own network.
+http:
+  middlewares:
+    admin-allowlist:
+      ipAllowList:
+        sourceRange:
+          - "${EC2_ADMIN_CIDR}"
+    badger:
+      plugin:
+        badger:
+          disableForwardAuth: true
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+
+  routers:
+    main-app-router-redirect:
+      rule: "Host(`pangolin.${EC2_DOMAIN}`)"
+      service: next-service
+      entryPoints:
+        - web
+      middlewares:
+        - admin-allowlist
+        - redirect-to-https
+        - badger
+
+    next-router:
+      rule: "Host(`pangolin.${EC2_DOMAIN}`) && !PathPrefix(`/api/v1`)"
+      service: next-service
+      entryPoints:
+        - websecure
+      middlewares:
+        - admin-allowlist
+        - badger
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "${EC2_DOMAIN}"
+            sans:
+              - "*.${EC2_DOMAIN}"
+
+    api-router:
+      rule: "Host(`pangolin.${EC2_DOMAIN}`) && PathPrefix(`/api/v1`)"
+      service: api-service
+      entryPoints:
+        - websecure
+      middlewares:
+        - admin-allowlist
+        - badger
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "${EC2_DOMAIN}"
+            sans:
+              - "*.${EC2_DOMAIN}"
+
+    ws-router:
+      rule: "Host(`pangolin.${EC2_DOMAIN}`)"
+      service: api-service
+      entryPoints:
+        - websecure
+      middlewares:
+        - admin-allowlist
+        - badger
+      tls:
+        certResolver: letsencrypt
+        domains:
+          - main: "${EC2_DOMAIN}"
+            sans:
+              - "*.${EC2_DOMAIN}"
+
+  services:
+    next-service:
+      loadBalancer:
+        servers:
+          - url: "http://pangolin:3002"
+
+    api-service:
+      loadBalancer:
+        servers:
+          - url: "http://pangolin:3000"
+
+tcp:
+  serversTransports:
+    pp-transport-v1:
+      proxyProtocol:
+        version: 1
+    pp-transport-v2:
+      proxyProtocol:
+        version: 2

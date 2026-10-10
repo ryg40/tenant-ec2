@@ -1,0 +1,94 @@
+# tenant-ec2: the option `copilot` of the Compose stack. The service `copilot` and the
+# gateway routes `copilot/luna` and `copilot/embed`, from one GitHub Copilot account.
+#
+# This file is an overlay. It is a valid model only together with compose.yaml and one
+# edge file:
+#   docker compose -f compose.yaml -f compose.caddy.yaml -f compose.copilot.yaml ...
+# The bootstrap puts it into `COMPOSE_FILE` when `EC2_OPTIONS` holds `copilot`.
+#
+# What the file adds:
+# - the service `copilot` on the networks `copilot` and `egress`;
+# - the network `copilot`: the gateway and the Copilot service, and no other member;
+# - to the gateway: that network, the key of the Copilot service and the route file
+#   `litellm/config.copilot.yaml`. That file holds the two Copilot routes and includes
+#   the routes of the core. Without this file, the gateway has no route to the service
+#   `copilot` and does not hold its key.
+#
+# Ports: no service of this file has a `ports:` entry.
+#
+# Storage: the two token files are on the data volume. The bootstrap makes the directory:
+#   /srv/data/copilot             1000:1000, mode 0700
+#
+# Variables: the one name of this file is in the block "Option copilot" of `.env.example`.
+# A missing value stops Compose only when this file is on.
+#
+# To use the routes, set the model settings of the services in the environment file:
+# `EC2_PI_DURABLE_MODEL=copilot/luna`, `EC2_OPENVIKING_VLM_MODEL=copilot/luna`, and
+# `EC2_OPENVIKING_EMBED_MODEL=copilot/embed` with `EC2_OPENVIKING_EMBED_DIMENSION=1536`.
+# Warning: do not change the embedding route of an OpenViking instance that holds data.
+# A model with another vector size does not fit the vectors that are there.
+
+services:
+  # The Copilot service: the same image with the provider `github_copilot/`. Its key
+  # refresh is a blocking call, so a stalled call stops only this service.
+  # It must reach GitHub, so it is on `egress`. Its one client is the gateway, on the
+  # network `copilot`.
+  # The two token files live on the data volume, owner 1000:1000. The login is one
+  # manual step on the host with the login script of the kit. This service never runs a
+  # login: the dead device-flow address makes a missing token fail at once.
+  # The login script reads COPILOT_TOKEN_DIR from the shell of the host, not from this
+  # file. Run it with COPILOT_TOKEN_DIR=/srv/data/copilot: the default is a directory of
+  # the kit clone, and this service does not read that directory.
+  copilot:
+    # kits.lock: server_kits.litellm.image (the second service of the kit).
+    image: litellm-gateway:1.103.0-p0.4.1
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--config", "/config/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      HOME: /tmp
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      LITELLM_TELEMETRY: "False"
+      LITELLM_DISABLE_NO_REDIS_WARNING: "true"
+      COPILOT_MASTER_KEY: ${EC2_COPILOT_MASTER_KEY:?add a value to .env (.env.example)}
+      GITHUB_COPILOT_TOKEN_DIR: /state/copilot
+      GITHUB_COPILOT_DEVICE_CODE_URL: http://127.0.0.1:9/device-flow-disabled
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - ./litellm/copilot.yaml:/config/config.yaml:ro
+      - type: bind
+        source: /srv/data/copilot
+        target: /state/copilot
+        bind: { create_host_path: false }
+    networks:
+      - copilot
+      - egress
+    healthcheck:
+      test: ["CMD", "python", "-S", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # The gateway with the option: one more network, the key of the Copilot service and the
+  # route file with the two Copilot routes. Compose adds the network, the name and the
+  # mount to the entries of compose.yaml. `command` takes the place of the command of
+  # compose.yaml: the gateway reads one route file, and `litellm/config.copilot.yaml`
+  # includes `litellm/config.yaml`.
+  litellm:
+    command: ["--config", "/config/config.copilot.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      # The key of the `copilot` service, for the routes `copilot/*`.
+      COPILOT_MASTER_KEY: ${EC2_COPILOT_MASTER_KEY:?add a value to .env (.env.example)}
+    volumes:
+      - ./litellm/config.copilot.yaml:/config/config.copilot.yaml:ro
+    networks:
+      copilot: {}
+
+networks:
+  # The gateway and the Copilot service.
+  copilot:
+    internal: true

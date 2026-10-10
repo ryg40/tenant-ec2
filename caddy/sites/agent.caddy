@@ -1,0 +1,18 @@
+# The public name `agent`: the pi-durable agent, for the range of the
+# administrator only. The agent checks its bearer on each path below `/v1/`.
+# The agent answers `/healthz` and `/` with no bearer, and a call to `/healthz`
+# can make a model request. So the edge stops the two paths for each caller.
+# The health check of the container uses `/v1/` on the loopback address.
+agent.{$EC2_DOMAIN} {
+	import public-name
+	@admin remote_ip {$EC2_ADMIN_CIDR}
+	handle @admin {
+		import plain-path
+		@closed path / /healthz
+		respond @closed 403
+		reverse_proxy pi-durable:5470
+	}
+	handle {
+		respond 403
+	}
+}

@@ -1,0 +1,21 @@
+# The second overlay of the local run of the gate: a stub in the place of OpenKnowledge.
+# `ok-auth/local-run.sh --upstream stub` adds it after `overlay.yaml`. Use it on a machine
+# with no image of the OpenKnowledge kit. The stub returns the headers of each request, so
+# this run also shows which headers the gate sends to its upstream.
+# The stub listens on port 80 as the user of the OpenKnowledge image, which is not root.
+
+services:
+  open-knowledge:
+    image: python:3-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2
+    pull_policy: missing
+    user: "10001:10001"
+    read_only: true
+    entrypoint: ["python", "-I", "/local-run/stubs.py", "upstream"]
+    volumes: !override
+      - ./ok-auth/local-run:/local-run:ro
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:80/readyz', timeout=3)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 0s

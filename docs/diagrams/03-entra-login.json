@@ -1,0 +1,433 @@
+{
+  "meta": {
+    "title": "03 / OpenKnowledge login",
+    "subtitle": "Browser login uses Entra ID. Neither edge skips the gate.",
+    "summary": "Browser login uses Entra ID. Neither edge skips the gate.",
+    "snapshot": "Merged source files. No live deployment.",
+    "walkNote": "Arrows show calls or dependencies, not live checks.",
+    "exportBase": "diagram",
+    "sources": []
+  },
+  "categories": [
+    {
+      "id": "aws",
+      "label": "aws",
+      "color": "#285b88"
+    },
+    {
+      "id": "service",
+      "label": "service",
+      "color": "#176b5b"
+    },
+    {
+      "id": "data",
+      "label": "data",
+      "color": "#94601d"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "external",
+      "label": "external",
+      "color": "#52616b"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "core",
+      "label": "Core",
+      "meaning": "The portable core.",
+      "line": "solid"
+    },
+    {
+      "id": "option",
+      "label": "Option",
+      "meaning": "Off until the installer selects it.",
+      "line": "dashed"
+    }
+  ],
+  "edgeKinds": [
+    {
+      "id": "flow",
+      "label": "Call or dependency",
+      "color": "#52616b"
+    }
+  ],
+  "callTypes": [],
+  "systems": [
+    {
+      "id": "path",
+      "label": "Browser request / one public name",
+      "color": "#176b5b"
+    },
+    {
+      "id": "identity",
+      "label": "Identity provider",
+      "color": "#9c3d45"
+    }
+  ],
+  "groups": [],
+  "nodes": [
+    {
+      "id": "browser",
+      "system": "path",
+      "x": 40,
+      "y": 190,
+      "w": 300,
+      "h": 130,
+      "label": "Browser\nOpens ok.<domain>\nStores the secure cookie",
+      "category": "external",
+      "status": "core",
+      "kind": "external",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        },
+        {
+          "path": "ok-auth/oauth2-proxy.cfg"
+        },
+        {
+          "path": "docs/entra.md"
+        }
+      ]
+    },
+    {
+      "id": "caddy",
+      "system": "path",
+      "x": 590,
+      "y": 190,
+      "w": 300,
+      "h": 130,
+      "label": "caddy\nEnds HTTPS\nRoutes ok to ok-auth",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        },
+        {
+          "path": "ok-auth/oauth2-proxy.cfg"
+        },
+        {
+          "path": "docs/entra.md"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "system": "path",
+      "x": 1140,
+      "y": 190,
+      "w": 340,
+      "h": 130,
+      "label": "ok-auth / HTTP 4180\n5. Check token\n6. Check allowed group",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        },
+        {
+          "path": "ok-auth/oauth2-proxy.cfg"
+        },
+        {
+          "path": "docs/entra.md"
+        }
+      ]
+    },
+    {
+      "id": "ok",
+      "system": "path",
+      "x": 1690,
+      "y": 190,
+      "w": 330,
+      "h": 130,
+      "label": "open-knowledge\nHTTP 80\nPrivate knowledge network",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        },
+        {
+          "path": "ok-auth/oauth2-proxy.cfg"
+        },
+        {
+          "path": "docs/entra.md"
+        }
+      ]
+    },
+    {
+      "id": "entra",
+      "system": "identity",
+      "x": 1040,
+      "y": 720,
+      "w": 340,
+      "h": 130,
+      "label": "Microsoft Entra ID\nTenant login\nAllowed group claim",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "compose.yaml"
+        },
+        {
+          "path": "ok-auth/oauth2-proxy.cfg"
+        },
+        {
+          "path": "docs/entra.md"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "one",
+      "from": "browser",
+      "to": "caddy",
+      "label": "1. HTTPS request",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.25,
+        "toT": 0.25
+      },
+      "export": {
+        "labelAt": [
+          365,
+          195
+        ]
+      }
+    },
+    {
+      "id": "two",
+      "from": "caddy",
+      "to": "auth",
+      "label": "1. HTTP proxy",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.25,
+        "toT": 0.25
+      },
+      "export": {
+        "labelAt": [
+          936,
+          195
+        ]
+      }
+    },
+    {
+      "id": "three",
+      "from": "auth",
+      "to": "browser",
+      "label": "2. No session: redirect to Entra ID",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "bottom"
+        ],
+        "fromT": 0.25,
+        "toT": 0.5
+      },
+      "export": {
+        "via": [
+          [
+            1225,
+            485
+          ],
+          [
+            190,
+            485
+          ]
+        ],
+        "labelAt": [
+          480,
+          455
+        ]
+      }
+    },
+    {
+      "id": "four",
+      "from": "browser",
+      "to": "entra",
+      "label": "3. Sign in",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "left"
+        ],
+        "fromT": 0.75,
+        "toT": 0.5
+      },
+      "export": {
+        "via": [
+          [
+            265,
+            785
+          ]
+        ],
+        "labelAt": [
+          585,
+          757
+        ]
+      }
+    },
+    {
+      "id": "five",
+      "from": "entra",
+      "to": "auth",
+      "label": "3. Callback via browser + edge",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "bottom"
+        ],
+        "fromT": 0.5,
+        "toT": 0.75
+      },
+      "export": {
+        "via": [
+          [
+            1530,
+            785
+          ],
+          [
+            1530,
+            545
+          ],
+          [
+            1395,
+            545
+          ]
+        ],
+        "labelAt": [
+          1550,
+          585
+        ]
+      }
+    },
+    {
+      "id": "six",
+      "from": "auth",
+      "to": "ok",
+      "label": "8. Valid session",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.25,
+        "toT": 0.25
+      },
+      "export": {
+        "labelAt": [
+          1500,
+          195
+        ]
+      }
+    },
+    {
+      "id": "exchange",
+      "from": "auth",
+      "to": "entra",
+      "label": "4. Code / token: gate-egress",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.7647058823529411
+      },
+      "export": {
+        "via": [
+          [
+            1310,
+            615
+          ],
+          [
+            1300,
+            615
+          ]
+        ],
+        "labelAt": [
+          1110,
+          585
+        ]
+      }
+    },
+    {
+      "id": "cookie",
+      "from": "auth",
+      "to": "browser",
+      "label": "7. Set __Host-ok cookie",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "right"
+        ],
+        "fromT": 0.1,
+        "toT": 0.75
+      },
+      "export": {
+        "via": [
+          [
+            1174,
+            405
+          ],
+          [
+            410,
+            405
+          ],
+          [
+            410,
+            287.5
+          ]
+        ],
+        "labelAt": [
+          480,
+          374
+        ]
+      }
+    }
+  ],
+  "scenarios": [],
+  "export": {
+    "stem": "03-entra-login",
+    "notes": [
+      "Steps 1-8 match docs/entra.md. Step 4 sends the client secret and PKCE verifier; Entra returns the ID token.",
+      "Step 5 checks signature, tenant issuer, client id, nonce and expiry. Step 6 requires the allowed group.",
+      "Step 7 sets the Secure, HttpOnly cookie and redirects to the page. Step 8 checks each later session on knowledge.",
+      "Pangolin replaces Caddy only. Its ok resource has no second Pangolin login.",
+      "Frames group related parts. Dashed component boxes mark options; all other component boxes mark the core."
+    ]
+  }
+}

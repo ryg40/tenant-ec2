@@ -1,0 +1,38 @@
+# Route file of the gateway with the option `copilot` (compose.copilot.yaml). The gateway
+# reads this file in place of `config.yaml`.
+# `include` adds the content of `config.yaml`, the routes and the settings of the core.
+# LiteLLM 1.103.0 reads the file of an `include` entry from the directory of this file.
+# It adds the routes of that file to the list below, and it takes each other block of
+# that file as it is. So this file holds only the two Copilot routes.
+# compose.copilot.yaml sets one more name:
+#   COPILOT_MASTER_KEY     The key of the service `copilot`, from EC2_COPILOT_MASTER_KEY.
+#
+# GPT-6 Luna runs at reasoning effort `xhigh` only (AGENTS.md). Each Luna route sets that
+# effort for a request that names none. Do not lower it. Do not add `drop_params`.
+include:
+  - config.yaml
+
+model_list:
+  # GPT-6 Luna through the service `copilot`.
+  # `litellm_proxy/` is the hop to another LiteLLM process; `luna` is its alias there
+  # (litellm/copilot.yaml). The timeout is longer than the timeout of that service.
+  - model_name: copilot/luna
+    litellm_params:
+      model: litellm_proxy/luna
+      api_base: http://copilot:4000
+      api_key: os.environ/COPILOT_MASTER_KEY
+      reasoning_effort: xhigh
+      timeout: 570
+      stream_timeout: 570
+
+  # An embedding route through the service `copilot`, with 1536 values.
+  - model_name: copilot/embed
+    litellm_params:
+      model: litellm_proxy/embed
+      api_base: http://copilot:4000
+      api_key: os.environ/COPILOT_MASTER_KEY
+      timeout: 570
+      stream_timeout: 570
+    model_info:
+      mode: embedding
+      output_vector_size: 1536

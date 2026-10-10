@@ -1,0 +1,467 @@
+{
+  "meta": {
+    "title": "05 / Options beside the core",
+    "subtitle": "An option stays off until the installer selects it. The core needs no home lab.",
+    "summary": "An option stays off until the installer selects it. The core needs no home lab.",
+    "snapshot": "Merged source files. No live deployment.",
+    "walkNote": "Arrows show calls or dependencies, not live checks.",
+    "exportBase": "diagram",
+    "sources": []
+  },
+  "categories": [
+    {
+      "id": "aws",
+      "label": "aws",
+      "color": "#285b88"
+    },
+    {
+      "id": "service",
+      "label": "service",
+      "color": "#176b5b"
+    },
+    {
+      "id": "data",
+      "label": "data",
+      "color": "#94601d"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "external",
+      "label": "external",
+      "color": "#52616b"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "core",
+      "label": "Core",
+      "meaning": "The portable core.",
+      "line": "solid"
+    },
+    {
+      "id": "option",
+      "label": "Option",
+      "meaning": "Off until the installer selects it.",
+      "line": "dashed"
+    }
+  ],
+  "edgeKinds": [
+    {
+      "id": "flow",
+      "label": "Call or dependency",
+      "color": "#52616b"
+    }
+  ],
+  "callTypes": [],
+  "systems": [
+    {
+      "id": "core",
+      "label": "Portable core",
+      "color": "#176b5b"
+    },
+    {
+      "id": "pangolin",
+      "label": "EC2_OPTIONS: pangolin",
+      "color": "#285b88"
+    },
+    {
+      "id": "copilot",
+      "label": "EC2_OPTIONS: copilot",
+      "color": "#176b5b"
+    },
+    {
+      "id": "dns",
+      "label": "EC2_DNS_PROVIDER",
+      "color": "#285b88"
+    },
+    {
+      "id": "home",
+      "label": "Optional home lab tools",
+      "color": "#52616b"
+    }
+  ],
+  "groups": [],
+  "nodes": [
+    {
+      "id": "core",
+      "system": "core",
+      "x": 40,
+      "y": 130,
+      "w": 340,
+      "h": 130,
+      "label": "Core services\nBedrock / Entra ID\nAgent / knowledge / memory",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "edge",
+      "system": "core",
+      "x": 40,
+      "y": 460,
+      "w": 340,
+      "h": 130,
+      "label": "caddy\nOne certificate per name\nHTTP-01 or TLS-ALPN-01",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "pg",
+      "system": "pangolin",
+      "x": 560,
+      "y": 130,
+      "w": 340,
+      "h": 130,
+      "label": "pangolin / gerbil / traefik\nReplaces caddy\nAdds the blueprint",
+      "category": "service",
+      "status": "option",
+      "kind": "OPTION / service",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "tunnel",
+      "system": "pangolin",
+      "x": 620,
+      "y": 460,
+      "w": 220,
+      "h": 130,
+      "label": "Newt / home site\nOutbound tunnel to Gerbil\nSite uses UDP 51820",
+      "category": "external",
+      "status": "option",
+      "kind": "OPTION / external",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "cert",
+      "system": "pangolin",
+      "x": 560,
+      "y": 790,
+      "w": 340,
+      "h": 130,
+      "label": "Porkbun DNS-01\nWildcard certificate\nPangolin needs porkbun",
+      "category": "identity",
+      "status": "option",
+      "kind": "OPTION / identity",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "cp",
+      "system": "copilot",
+      "x": 1080,
+      "y": 130,
+      "w": 340,
+      "h": 130,
+      "label": "copilot\nAdds a gateway service\nKeeps Bedrock routes",
+      "category": "service",
+      "status": "option",
+      "kind": "OPTION / service",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "cp-route",
+      "system": "copilot",
+      "x": 1130,
+      "y": 460,
+      "w": 240,
+      "h": 130,
+      "label": "copilot/luna + copilot/embed\nLuna stays at xhigh\nRequires Copilot login",
+      "category": "service",
+      "status": "option",
+      "kind": "OPTION / service",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "cp-data",
+      "system": "copilot",
+      "x": 1080,
+      "y": 790,
+      "w": 340,
+      "h": 130,
+      "label": "Copilot token files\nEBS data volume\nNew login for this host",
+      "category": "data",
+      "status": "option",
+      "kind": "OPTION / data",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "system": "dns",
+      "x": 1600,
+      "y": 130,
+      "w": 340,
+      "h": 130,
+      "label": "manual / default\nporkbun / route53\ncloudflare",
+      "category": "aws",
+      "status": "core",
+      "kind": "DNS provider setting",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "records",
+      "system": "dns",
+      "x": 1600,
+      "y": 460,
+      "w": 340,
+      "h": 130,
+      "label": "EC2_EDGE_NAMES\nok / agent / llm / ov\nDefault: ok only",
+      "category": "aws",
+      "status": "core",
+      "kind": "public names",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "creds",
+      "system": "dns",
+      "x": 1600,
+      "y": 790,
+      "w": 340,
+      "h": 130,
+      "label": "DNS credentials\nStay on installer machine\nPangolin Porkbun exception",
+      "category": "identity",
+      "status": "option",
+      "kind": "OPTION / identity",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "system": "home",
+      "x": 2120,
+      "y": 130,
+      "w": 340,
+      "h": 130,
+      "label": "Home tools\nNewt site / web search\nPrivate kit source",
+      "category": "external",
+      "status": "option",
+      "kind": "OPTION / external",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    },
+    {
+      "id": "stores",
+      "system": "home",
+      "x": 2120,
+      "y": 460,
+      "w": 340,
+      "h": 130,
+      "label": "Bitwarden / Vault\nOptional credential copies\nCore does not need them",
+      "category": "identity",
+      "status": "option",
+      "kind": "OPTION / identity",
+      "evidence": [
+        {
+          "path": ".env.example"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "replace",
+      "from": "pg",
+      "to": "edge",
+      "label": "replaces",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "left",
+          "right"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "via": [
+          [
+            470,
+            195
+          ],
+          [
+            470,
+            525
+          ]
+        ],
+        "labelAt": [
+          414,
+          340
+        ]
+      }
+    },
+    {
+      "id": "site",
+      "from": "tunnel",
+      "to": "pg",
+      "label": "tunnel",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "top",
+          "bottom"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          747,
+          351
+        ]
+      }
+    },
+    {
+      "id": "wildcard",
+      "from": "cert",
+      "to": "pg",
+      "label": "TLS setup",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "top",
+          "bottom"
+        ],
+        "fromT": 0.1,
+        "toT": 0.1
+      },
+      "export": {
+        "labelAt": [
+          610,
+          658
+        ]
+      }
+    },
+    {
+      "id": "route",
+      "from": "cp",
+      "to": "cp-route",
+      "label": "adds",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1267,
+          351
+        ]
+      }
+    },
+    {
+      "id": "state",
+      "from": "cp",
+      "to": "cp-data",
+      "label": "keeps state",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.9,
+        "toT": 0.9
+      },
+      "export": {
+        "labelAt": [
+          1300,
+          663
+        ]
+      }
+    },
+    {
+      "id": "dns",
+      "from": "providers",
+      "to": "records",
+      "label": "selected records",
+      "kind": "flow",
+      "status": "option",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1786,
+          351
+        ]
+      }
+    }
+  ],
+  "scenarios": [],
+  "export": {
+    "stem": "05-options",
+    "notes": [
+      "EC2_OPTIONS: empty / copilot / pangolin / pangolin,copilot. Unknown option names stop the scripts.",
+      "Each selected public name gets an A record to ElasticIp. Pangolin adds pangolin.<domain>.",
+      "Pangolin keeps ok-auth as the ok target. Its ok resource uses the Entra gate, not a second Pangolin login.",
+      "DNS provider credentials stay off the core host. Only Pangolin needs the Porkbun pair there for DNS-01.",
+      "Frames group related parts. Dashed component boxes mark options; all other component boxes mark the core.",
+      "A Newt site uses UDP 51820. UDP 21820 serves clients; both ports open only with Pangolin."
+    ]
+  }
+}

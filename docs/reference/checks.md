@@ -1,0 +1,228 @@
+# Checks
+
+[Install](../install.md) | [Compose stack](compose-stack.md) | [Secret handling](../secret-handling.md)
+
+`scripts/check.sh` runs source checks, local container checks and offline regression tests over its own tree.
+An absent file kind gives a skip line.
+Each operations, storage, verifier and publish regression line reports a skip when its test file is absent.
+The full form has 36 result lines for this tree.
+The pre-commit hook runs the check script on the exact staged copy, before the scan.
+
+```sh
+sh scripts/check.sh
+CHECK_OFFLINE=1 sh scripts/check.sh
+sh scripts/check.sh --help
+```
+
+The offline form makes no external network call.
+Its Caddy test still uses a local container and HTTP stubs.
+It neither pulls nor builds a missing check image.
+
+## Tools and files
+
+| Check | Files | Tool |
+| --- | --- | --- |
+| `cfn-lint` | Each `*.cfn.yaml` and `*.cfn.yml`. | `cfn-lint`; install with `pipx install cfn-lint`. |
+| `validate-template` | The same templates. | AWS CLI version 2, profile `tenant-ec2`. This read-only call is skipped without the profile or with `CHECK_OFFLINE=1`. |
+| `shellcheck` | Each `*.sh`, executable shell text under `scripts/`, and each Git hook. | `shellcheck` 0.10.0 or later. |
+| `compose` | All four file sets, service and network memberships, port publishing, required names and option isolation. It compares each environment name of the agent and its value with the release contract, with `off` and `mcp`. | Docker with the Compose plugin and a stub environment file. |
+| `gateway routes` | Core and Copilot route names, configuration and model settings. | Python 3 and PyYAML. |
+| `blueprint` | Selected Pangolin resources, the gate target and path rules. | Python 3 and `envsubst`. |
+| `core edge` | The Caddy configuration and request paths, administrator range, refused paths and missing-name behavior. | Docker; local stubs replace the service targets. |
+| `render` | The host template with each `EnablePangolin` and `EnableBucket` value; security group ports and instance-role limits. | Python 3 and PyYAML. |
+| `dry run` | `scripts/aws-host.sh --dry-run` for `deploy`, `secret`, `dns` and `verify`, with the core and each option set. | Python 3 and command stubs. |
+| `secret` | Secret filtering, both Pangolin first-boot exceptions, bootstrap environment rendering and the verifier's file-set test. | Python 3 and an AWS stub. No secret-store write. |
+| `providers` | DNS plans, creation, correction, repeat runs, refused credentials and private credential files for every provider. | Python 3 and command stubs with fake zones. |
+| Bootstrap dry run | `scripts/host-bootstrap.sh --dry-run` with a fixture in place of `/`. | Python 3, `envsubst` and command stubs. |
+| `environment forms` | Four lines, one per file set. Shared form tests, safe messages, first-boot exceptions and refusal before a secret write. | Python 3, edge shell tools and `envsubst`; an AWS stub records writes. |
+| `start` | The real bootstrap Compose command for each file set, including `--remove-orphans` and the health wait. | Python 3 and a Docker stub. It starts no container. |
+| `option contract` | Agreement on Compose files, necessary names and services across the check, bootstrap, deploy script and verifier. | Python 3 and command stubs. It tests the agent with and without a pin. |
+| `selftest scripts/aws-provisioner.sh` | Provisioner helper fixtures, including the credential-store selection. | The script's `selftest` command with isolated stubs. |
+| `selftest scripts/entra-app.sh` | Entra registration helper fixtures. | The script's `selftest` command with an Azure CLI stub. |
+| `selftest scripts/security-review.sh` | The advisory reader's fixtures, not a security review. | The script's `--self-test` command. The printed pass line is required because the exit status is always zero. |
+| `loaders` | Claude Code and Pi load the review skill in a new clone. | Git, Node.js, Claude Code and the Pi package. A local API stub replaces the model provider. |
+| `selftest scripts/build-diagrams.py` | Invalid scene geometry and binding fixtures. | Python 3 and `--self-test`; no npm install. |
+| `scenes` | Excalidraw loads each scene and compares its SVG export. | Python Playwright with Chromium, npm and the pinned packages. |
+| `local run` | The real gate image with a stub identity provider and upstream. | Docker, Python 3 and `ok-auth/local-run.sh --upstream stub`. |
+| `operations regression` | The templates, the IAM limits, the journal routing, the cursor, the rotation, the agent files and the bootstrap switch. | `python3 -I scripts/test-operations.py`; needs PyYAML. No network call. |
+| `storage regression` | The order of the first boot, a missing or late mount, the checks at a restart, the fstab paths, the unit syntax and the Git ownership. It runs the Compose command of the bootstrap for each of the four file sets. | `python3 -I scripts/test-storage.py`; needs PyYAML and the systemd analysis tools. The fixture with numeric ids needs root. No service and no mount runs. |
+| `verifier regression` | The state of a deployed container, the internal HTTP status and authentication, redirects, deadlines, safe errors and the SSM commands. One test for each value of `EC2_OPTIONS`: the verifier checks the services of that file set only. | `python3 -I scripts/test-verify-deployed.py`; needs PyYAML, and `curl` and Node for the complete probe fixtures. No live service and no AWS call. |
+| `publish regression` | The private exclusions, the export of the publish set and the reader rules, when the development tests exist. | Python's unittest runner. It also runs on the staged copy with no Git metadata. A snapshot has no development tests and reports a skip. |
+| `scan` | The tracked files. | `scripts/scan.sh tree`. |
+
+Each check prints `ok`, `skip (<reason>)` or `FAIL`.
+The script exits with status 1 on a failure or a missing required tool.
+A missing required tool is never a pass.
+Missing optional loader or scene tools give a skip, and the script can still pass.
+A wrong `CHECK_PI_PACKAGE` directory fails instead of skipping.
+
+The script searches the whole tree except top-level `kits/`, `.git/`, `.local/`, `data/`, `state/` and `secrets/`.
+Under `scripts/`, a first line of `#!/bin/sh` or `#!/bin/bash` also identifies a shell file without a `.sh` suffix.
+A different name or first line can leave a file outside these checks.
+
+## Template and Compose checks
+
+A template larger than 51200 bytes fails, also in offline mode.
+`aws cloudformation deploy` sends a larger template through S3; the provisioner has no right to upload a template object.
+
+Compose overlays are not checked alone.
+The four selected file sets are listed in the [Compose reference](compose-stack.md#file-sets).
+A Compose variable absent from `.env.example` fails the check.
+
+A Compose `env_file:` that names anything other than `.env.example` also fails before Compose runs.
+This prevents a check from reading a private file whose values might appear in an error.
+The check reads Compose source text, not files that the model includes.
+The shell environment does not reach Compose; the explicit stub replaces the working `.env`.
+
+The model check also fails on these conditions:
+
+- `gate-egress` is internal or has any member other than the gate.
+- `knowledge` has members other than OpenKnowledge and the gate, or lacks either one.
+- `knowledge-agent` has members other than OpenKnowledge and the agent, or lacks either one.
+- A kit image name differs from `kits.lock`, or a support image tag or digest differs from the lock.
+
+These checks enforce the lock's current pins. They do not add a digest where the lock has none.
+
+## Deploy dry run
+
+The dry run checks exercise `deploy`, `secret`, `dns` and `verify` with the sample and populated stubs.
+The option-aware checks also exercise the core and each selected option.
+Stubs of `aws` and `curl` appear first on `PATH`; they record and refuse calls.
+
+The check fails on any of these results:
+
+- The dry run exits with an error or prints no expected command.
+- It calls an external service or leaves a file.
+- It prints a fake Part 1 value other than the public domain name.
+- The `secret` dry run accepts a single quote or a final backslash in a value.
+- The file set of `verify` is not the file set of `EC2_OPTIONS`, or `verify` does not give that file set and the public names to `scripts/verify-deployed.py`.
+- `verify` lets an error text of Compose reach the output of the host.
+
+The check prints no captured dry run output.
+The shell environment does not reach the script.
+The DNS provider checks use stubs, not live zones.
+
+## Bootstrap dry run
+
+The check runs `scripts/host-bootstrap.sh --dry-run --root <fixture>` in a new temporary directory.
+The fixture contains stack values and fake required environment values.
+The three generated keys stay empty, as at first boot.
+
+Stubs replace `docker`, `aws`, `systemctl`, `modprobe`, `iptables`, `git` and `curl`.
+They answer read-only questions and refuse calls that would change state.
+
+The check fails if the dry run:
+
+- Exits with an error or omits one of its nine steps for valid forms.
+- Accepts an unknown option instead of stopping at step 2.
+- Changes the fixture, the lock or the host, or leaves a file.
+- Prints a fake secret or a trace when called with `sh -x`.
+- Uses a `placeholder` function that differs from the deploy script's function.
+- Does not name the durable mounts of Docker before its first start of a service, for one of the four file sets.
+- Does not name the export of the journal before the start of the CloudWatch agent, in the run with operations on.
+
+The check prints no captured dry run output.
+A dry run proves neither a real build nor a real service start.
+The [host boot reference](host-boot.md#known-limits) keeps those limits.
+
+## Environment forms
+
+Each `environment forms <file set>` line runs `scripts/test-env-forms.py` for its options.
+The tests use a restricted tool path, an empty environment and new synthetic fixtures.
+They exercise `host-bootstrap.sh --check-forms`, `secret`, bootstrap rendering and the bootstrap dry run.
+
+The check fails when any of these conditions occurs:
+
+- A malformed administrator range, certificate address, domain, thinking level, model route, vector size, search selector or list passes.
+- With Pangolin, a malformed tunnel endpoint or site identifier passes.
+- A message lacks the setting or form rule, or prints the malformed value.
+- The test changes its input, leaves a temporary file, calls a host tool or makes an external call.
+- `secret` calls AWS or writes its JSON file with a malformed value, even if cleanup removes that file.
+- A first-boot exception fails, or `--allow-empty` permits a malformed nonempty value.
+- The bootstrap writes a malformed environment file, or its dry run continues beyond step 2 with a malformed form.
+- Copilot routes pass with Copilot off, or valid vector boundaries fail.
+
+A Python audit hook records JSON file writes before cleanup. A valid write proves that the observer runs.
+The tests also prove that `sh -x` prints no credential and that empty values receive no form test.
+The existing option-contract line still tests required names and both MCP bridge names.
+The form test does not replace those presence tests.
+
+## Start and option contract
+
+The `start` line runs the bootstrap's real `compose` and `up` functions with a Docker stub.
+It fails if a start lacks `--remove-orphans`, the health wait, or an ordered Compose file of the selected set.
+A dry run's printed command alone cannot prove these facts.
+
+The `option contract` line compares four readers of `EC2_OPTIONS` for each file set.
+They are the check script, bootstrap, deploy script and deployed verifier.
+It fails when their file sets differ or the bootstrap needs a name that `secret` does not require.
+It includes active edge settings and the two web search names with `EC2_PI_DURABLE_WEB_SEARCH=mcp`.
+It tests each of the two names alone.
+An unsupported value of the setting must stop `secret` and the bootstrap dry run.
+It compares the services that bootstrap starts with both verification service lists.
+It tests the agent with a pin and with no pin.
+It fails if an unpinned agent gets no skip, or verification accepts a missing service that bootstrap starts.
+
+## Gate checks
+
+The check script runs both commands. You can also run them separately:
+
+| Command | What it checks | Requirements |
+| --- | --- | --- |
+| `sh scripts/entra-app.sh selftest` | App registration, secret creation, dry runs and refusal to write the sample file, with an Azure CLI stub. | Python 3; no Azure call. |
+| `sh ok-auth/local-run.sh --upstream stub` | The actual gate image with a local issuer, Graph and upstream stubs. Tests login, group refusal, token checks, cookies and network paths. | Docker and Python 3; no cloud credential. |
+
+The local gate run starts no edge and proves no real Entra login.
+It reads both edge files and uses their fixed `edge-ok` range.
+Run only one local gate check at a time, away from an installed stack.
+The fixed range can conflict with another run or with the deployed edge.
+The [Entra page](../entra.md#prove-the-gate-before-the-deploy) lists each local assertion and its limits.
+
+## Diagram checks
+
+Run `python3 -I scripts/build-diagrams.py --self-test` for the invalid-geometry fixtures.
+Run `python3 -I scripts/build-diagrams.py --check` for the five scenes and matching SVG exports.
+The [architecture page](../architecture.md#rebuild-and-check) gives tool requirements and the rebuild command.
+The check script runs both commands as `selftest scripts/build-diagrams.py` and `scenes docs/diagrams/`.
+Offline mode skips `scenes` unless `CHECK_DIAGRAM_NPM_DIR` supplies the pinned packages.
+The scene line also skips without Python Playwright with Chromium or without npm.
+
+## Hooks and fallback tools
+
+A manual run reads the working tree, including files before `git add`.
+The hook exports the index into a temporary directory and runs that copy of the check script.
+Thus it checks the proposed commit, not unstaged fixes.
+A staged finding refuses a commit even when the working file is correct.
+An unstaged file changes nothing in the hook's copy.
+
+The hook sets `CHECK_OFFLINE=1`, `CHECK_NO_SCAN=1` and `CHECK_NO_LOCAL_RUN=1`.
+It runs its own scan of staged changes after the checks.
+The local gate run stays outside the hook because its fixed network range prevents concurrent runs.
+
+| Setting | Effect |
+| --- | --- |
+| `CHECK_NO_LOCAL_RUN=1` | Skips the local gate run. Omit it for one manual run when no other gate run uses the fixed range. |
+| `CHECK_PI_PACKAGE` | Names the installed Pi package directory for loader tests. The default uses the global npm package directory. |
+| `CHECK_DIAGRAM_NPM_DIR` | Names a directory with the exact npm package versions required by `scripts/build-diagrams.py`. The scene check then needs no network call. |
+
+The loader line skips without Node.js, Claude Code or the Pi package.
+Install the missing tool to remove that skip; use `CHECK_PI_PACKAGE` when Pi is not in the default directory.
+
+Without local `cfn-lint` or `shellcheck`, the script uses Docker.
+It uses `koalaman/shellcheck:stable` and a local `tenant-ec2-cfn-lint` image built from `python:3-slim` and PyPI.
+The two Docker Hub base images are pinned by digest.
+The script reports a fallback with a `note:` line.
+
+## Publication checks
+
+Publication has separate checks from the static check script:
+
+```sh
+python3 scripts/publish_check.py
+python3 scripts/publish_check.py --public
+sh scripts/scan.sh --level fail tree
+```
+
+The [publishing page](../publishing.md) defines the publish set and approval rule.
+The public reader check refuses private planning references, machine-specific paths and dated records of one host.
+The [security review](../security-review.md) gives suggestions only; it does not replace or disable the secret scan.

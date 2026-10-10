@@ -1,0 +1,701 @@
+{
+  "meta": {
+    "title": "01 / AWS core",
+    "subtitle": "One instance. Separate block storage, shared files and identity.",
+    "summary": "One instance. Separate block storage, shared files and identity.",
+    "snapshot": "Merged source files. No live deployment.",
+    "walkNote": "Arrows show calls or dependencies, not live checks.",
+    "exportBase": "diagram",
+    "sources": []
+  },
+  "categories": [
+    {
+      "id": "aws",
+      "label": "aws",
+      "color": "#285b88"
+    },
+    {
+      "id": "service",
+      "label": "service",
+      "color": "#176b5b"
+    },
+    {
+      "id": "data",
+      "label": "data",
+      "color": "#94601d"
+    },
+    {
+      "id": "identity",
+      "label": "identity",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "external",
+      "label": "external",
+      "color": "#52616b"
+    }
+  ],
+  "statuses": [
+    {
+      "id": "core",
+      "label": "Core",
+      "meaning": "The portable core.",
+      "line": "solid"
+    },
+    {
+      "id": "option",
+      "label": "Option",
+      "meaning": "Off until the installer selects it.",
+      "line": "dashed"
+    }
+  ],
+  "edgeKinds": [
+    {
+      "id": "flow",
+      "label": "Call or dependency",
+      "color": "#52616b"
+    }
+  ],
+  "callTypes": [],
+  "systems": [
+    {
+      "id": "install",
+      "label": "Installer / IAM",
+      "color": "#9c3d45"
+    },
+    {
+      "id": "vpc",
+      "label": "Vpc",
+      "color": "#285b88"
+    },
+    {
+      "id": "services",
+      "label": "AWS services",
+      "color": "#285b88"
+    },
+    {
+      "id": "operations",
+      "label": "EnableOperations=true / optional",
+      "color": "#285b88"
+    }
+  ],
+  "groups": [
+    {
+      "id": "subnet",
+      "system": "vpc",
+      "label": "Subnet"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "provisioner",
+      "system": "install",
+      "x": 40,
+      "y": 130,
+      "w": 310,
+      "h": 130,
+      "label": "Provisioner\nScoped IAM user\nDeploys the host stack",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/aws-provisioner.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "boundary",
+      "system": "install",
+      "x": 40,
+      "y": 390,
+      "w": 310,
+      "h": 130,
+      "label": "Boundary\nLimits each host role\nGrants no right by itself",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "role",
+      "system": "install",
+      "x": 40,
+      "y": 650,
+      "w": 310,
+      "h": 130,
+      "label": "InstanceRole\nInstanceProfile attaches it\nNo provisioner key on EC2",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "key",
+      "system": "install",
+      "x": 40,
+      "y": 910,
+      "w": 310,
+      "h": 130,
+      "label": "KeyPair\nSshPublicKey is imported\nPrivate key stays off EC2",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "eip",
+      "system": "vpc",
+      "x": 640,
+      "y": 130,
+      "w": 310,
+      "h": 130,
+      "label": "ElasticIp\nStable public address\nDNS A records point here",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "sg",
+      "system": "vpc",
+      "x": 640,
+      "y": 390,
+      "w": 310,
+      "h": 130,
+      "label": "InstanceSecurityGroup\nPublic: TCP 80, 443\nAdminCidr only: TCP 22",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "instance",
+      "system": "vpc",
+      "x": 640,
+      "y": 650,
+      "w": 310,
+      "h": 130,
+      "label": "Instance\nAmazon Linux 2023 x86_64\nt3a.large / Docker Compose",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "group": "subnet",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "volume",
+      "system": "vpc",
+      "x": 640,
+      "y": 910,
+      "w": 310,
+      "h": 130,
+      "label": "DataVolume\nEncrypted gp3 / retained\nPostgres and agent state",
+      "category": "data",
+      "status": "core",
+      "kind": "data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "route",
+      "system": "vpc",
+      "x": 1070,
+      "y": 130,
+      "w": 310,
+      "h": 130,
+      "label": "InternetGateway\nRouteTable / DefaultRoute\nInternet route of Subnet",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "efssg",
+      "system": "vpc",
+      "x": 1070,
+      "y": 390,
+      "w": 310,
+      "h": 130,
+      "label": "MountTargetSecurityGroup\nTCP 2049 from\nInstanceSecurityGroup only",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "mount",
+      "system": "vpc",
+      "x": 1070,
+      "y": 650,
+      "w": 310,
+      "h": 130,
+      "label": "MountTarget\nOne target in Subnet\nEFS uses TLS and IAM",
+      "category": "aws",
+      "status": "core",
+      "kind": "aws",
+      "group": "subnet",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "secret",
+      "system": "services",
+      "x": 1580,
+      "y": 130,
+      "w": 310,
+      "h": 130,
+      "label": "Secrets Manager\n<project>/env\nHost reads / installer writes",
+      "category": "identity",
+      "status": "core",
+      "kind": "identity",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "bedrock",
+      "system": "services",
+      "x": 1580,
+      "y": 390,
+      "w": 310,
+      "h": 130,
+      "label": "Bedrock\nGPT-6 Luna / xhigh\nTitan text embeddings v2",
+      "category": "service",
+      "status": "core",
+      "kind": "service",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "efs",
+      "system": "services",
+      "x": 1580,
+      "y": 650,
+      "w": 310,
+      "h": 130,
+      "label": "FileSystem / EFS\nEncrypted / retained\nThree access points",
+      "category": "data",
+      "status": "core",
+      "kind": "data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "aps",
+      "system": "services",
+      "x": 1580,
+      "y": 910,
+      "w": 310,
+      "h": 155,
+      "label": "Access points / UID:GID\nopen-knowledge 10001:10001\nopenviking 1101:1101\nshared 1102:1102",
+      "category": "data",
+      "status": "core",
+      "kind": "data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "bucket",
+      "system": "services",
+      "x": 1580,
+      "y": 1170,
+      "w": 310,
+      "h": 130,
+      "label": "Bucket / S3\nEnableBucket=true\nPrivate / SSE-S3 / retained",
+      "category": "data",
+      "status": "option",
+      "kind": "OPTION / data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "system": "operations",
+      "x": 40,
+      "y": 1480,
+      "w": 360,
+      "h": 130,
+      "label": "Daily data-volume snapshots\n03:00 UTC / keep seven\nbootstrap-<Project>-dlm",
+      "category": "data",
+      "status": "option",
+      "kind": "OPTION / data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        },
+        {
+          "path": "scripts/aws-provisioner.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "logs",
+      "system": "operations",
+      "x": 560,
+      "y": 1480,
+      "w": 360,
+      "h": 130,
+      "label": "Host logs / CloudWatch\n/<Project>/host / 14 days\nJournal export each minute",
+      "category": "data",
+      "status": "option",
+      "kind": "OPTION / data",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        },
+        {
+          "path": "scripts/aws-provisioner.cfn.yaml"
+        }
+      ]
+    },
+    {
+      "id": "alarm",
+      "system": "operations",
+      "x": 1080,
+      "y": 1480,
+      "w": 360,
+      "h": 130,
+      "label": "Billing alarm + SNS topic\n<Project>-billing / -alarm\nus-east-1",
+      "category": "aws",
+      "status": "option",
+      "kind": "OPTION / aws",
+      "evidence": [
+        {
+          "path": "scripts/aws-host.cfn.yaml"
+        },
+        {
+          "path": "scripts/aws-provisioner.cfn.yaml"
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "boundary-role",
+      "from": "boundary",
+      "to": "role",
+      "label": "limits",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          205,
+          565
+        ]
+      }
+    },
+    {
+      "id": "attach-role",
+      "from": "role",
+      "to": "instance",
+      "label": "profile",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          447,
+          694
+        ]
+      }
+    },
+    {
+      "id": "key-instance",
+      "from": "key",
+      "to": "instance",
+      "label": "SSH key",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.8
+      },
+      "export": {
+        "via": [
+          [
+            485,
+            975
+          ],
+          [
+            485,
+            754
+          ]
+        ],
+        "labelAt": [
+          495,
+          840
+        ]
+      }
+    },
+    {
+      "id": "eip-sg",
+      "from": "eip",
+      "to": "sg",
+      "label": "inbound",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          805,
+          305
+        ]
+      }
+    },
+    {
+      "id": "sg-instance",
+      "from": "sg",
+      "to": "instance",
+      "label": "filter",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          805,
+          565
+        ]
+      }
+    },
+    {
+      "id": "volume-instance",
+      "from": "instance",
+      "to": "volume",
+      "label": "attach",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          805,
+          825
+        ]
+      }
+    },
+    {
+      "id": "instance-mount",
+      "from": "instance",
+      "to": "mount",
+      "label": "NFS",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          993,
+          691
+        ]
+      }
+    },
+    {
+      "id": "efssg-mount",
+      "from": "efssg",
+      "to": "mount",
+      "label": "filter",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1235,
+          565
+        ]
+      }
+    },
+    {
+      "id": "mount-efs",
+      "from": "mount",
+      "to": "efs",
+      "label": "TLS + IAM",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1435,
+          691
+        ]
+      }
+    },
+    {
+      "id": "efs-aps",
+      "from": "efs",
+      "to": "aps",
+      "label": "mount via",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "bottom",
+          "top"
+        ],
+        "fromT": 0.5,
+        "toT": 0.5
+      },
+      "export": {
+        "labelAt": [
+          1745,
+          825
+        ]
+      }
+    },
+    {
+      "id": "instance-route",
+      "from": "instance",
+      "to": "route",
+      "label": "outbound",
+      "kind": "flow",
+      "status": "core",
+      "route": {
+        "sides": [
+          "right",
+          "left"
+        ],
+        "fromT": 0.25,
+        "toT": 0.5
+      },
+      "export": {
+        "via": [
+          [
+            1010,
+            682.5
+          ],
+          [
+            1010,
+            195
+          ]
+        ],
+        "labelAt": [
+          1023,
+          290
+        ]
+      }
+    }
+  ],
+  "scenarios": [],
+  "export": {
+    "stem": "01-aws-core",
+    "notes": [
+      "IAM: Provisioner creates bounded roles; InstanceRole permits the host to read its secret and invoke Bedrock.",
+      "Docker requires four durable mounts and the metadata guard: the EBS data volume plus the three EFS access points.",
+      "EnableOperations and EnableBucket are separate switches, both off by default. The administrator owns the snapshot role.",
+      "Gateway calls Bedrock through the internet route. EnableBucket adds scoped object access only after the policy update.",
+      "Core opens no tunnel port. EnablePangolin adds UDP 51820 and 21820. EFS and EBS are separate services.",
+      "Frames group related parts. Dashed component boxes mark options; all other component boxes mark the core."
+    ]
+  }
+}

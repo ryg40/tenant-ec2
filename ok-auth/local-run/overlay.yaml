@@ -1,0 +1,138 @@
+# The overlay of the local run of the gate. Only `ok-auth/local-run.sh` uses it, together
+# with `compose.yaml` and the core edge file `compose.caddy.yaml`. It is not a part of the
+# stack of the host, and it is not a complete Compose model alone.
+#
+# The run starts the services `open-knowledge` and `ok-auth` as `compose.yaml` has them.
+# The edge file adds the edge network `edge-ok` to `ok-auth` and gives that network its
+# fixed range, as on a host. This overlay names no range and makes no edge network.
+# This overlay puts a stub in the place of each part that the run must not use:
+#   Entra ID    the service `stub-issuer`. It is on `gate-egress`, which is internal here:
+#               the run has no route to the internet. On that network the stub has the
+#               two names of Microsoft that the gate calls, with a certificate that it
+#               makes at each start. So the gate keeps its real issuer URL. The gate of
+#               the run trusts that one certificate and no other (SSL_CERT_FILE).
+#   the edge    the service `probe-edge`, on the edge network `edge-ok` of the edge
+#               file. The run does not start `caddy`: the probe is the edge.
+#   the data    two memory file systems in place of the two directories of the host.
+# Each other probe is a client on one network: it shows what that network reaches.
+#
+# The names come from the environment file that the script writes for one run.
+# The image: python:3-slim, pinned by its digest, as in scripts/check.sh.
+
+x-probe: &probe
+  profiles: [probe]
+  image: python:3-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2
+  user: "65534:65534"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment:
+    PROBE_DOMAIN: ${EC2_DOMAIN:?the script sets it}
+    PROBE_TENANT: ${EC2_OK_ENTRA_TENANT_ID:?the script sets it}
+    PROBE_CLIENT_ID: ${EC2_OK_OIDC_CLIENT_ID:?the script sets it}
+    PROBE_GROUP: ${EC2_OK_ENTRA_GROUP_ID:?the script sets it}
+    PROBE_ISSUER_BASE: https://login.microsoftonline.com
+    PROBE_CA_FILE: /local-run-tls/ca.pem
+    PROBE_UPSTREAM: ${LOCAL_RUN_UPSTREAM:?the script sets it}
+    # The range of `trusted_proxy_ips` in ok-auth/oauth2-proxy.cfg. The script reads it there.
+    PROBE_EDGE_RANGE: ${LOCAL_RUN_EDGE_RANGE:?the script sets it}
+  volumes:
+    - ./ok-auth/local-run:/local-run:ro
+    - local-run-tls:/local-run-tls:ro
+
+services:
+  open-knowledge:
+    volumes: !override
+      - type: tmpfs
+        target: /data
+        tmpfs: { mode: 0o1777 }
+      - type: tmpfs
+        target: /shared
+        tmpfs: { mode: 0o1777 }
+
+  ok-auth:
+    environment:
+      # The one certificate that the gate of the run trusts: the certificate of the stub.
+      SSL_CERT_FILE: /local-run-tls/ca.pem
+    volumes:
+      - local-run-tls:/local-run-tls:ro
+    depends_on:
+      stub-issuer:
+        condition: service_healthy
+
+  stub-issuer:
+    image: python:3-slim@sha256:f85c5697265c178cc6887276c55fe16cf3d14ca35c3df6a5eab3b360534a55d2
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["python", "-I", "/local-run/stubs.py", "issuer"]
+    environment:
+      STUB_BASE_URL: https://login.microsoftonline.com
+      STUB_TLS_DIR: /local-run-tls
+      STUB_TENANT: ${EC2_OK_ENTRA_TENANT_ID:?the script sets it}
+      STUB_OTHER_TENANT: ${LOCAL_RUN_OTHER_TENANT:?the script sets it}
+      STUB_CLIENT_ID: ${EC2_OK_OIDC_CLIENT_ID:?the script sets it}
+      STUB_CLIENT_SECRET: ${EC2_OK_OIDC_CLIENT_SECRET:?the script sets it}
+      STUB_REDIRECT_URI: https://ok.${EC2_DOMAIN:?the script sets it}/oauth2/callback
+      STUB_GROUP: ${EC2_OK_ENTRA_GROUP_ID:?the script sets it}
+      STUB_OTHER_GROUP: ${LOCAL_RUN_OTHER_GROUP:?the script sets it}
+    volumes:
+      - ./ok-auth/local-run:/local-run:ro
+      - local-run-tls:/local-run-tls
+    networks:
+      gate-egress:
+        aliases:
+          - login.microsoftonline.com
+          - graph.microsoft.com
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://login.microsoftonline.com/healthz', timeout=3, context=ssl.create_default_context(cafile='/local-run-tls/ca.pem'))"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # In the place of the edge: in the range that the gate trusts. It also reaches the stub
+  # issuer, as the browser of a user reaches Entra ID.
+  probe-edge:
+    <<: *probe
+    command: ["python", "-I", "/local-run/probe.py", "edge"]
+    networks:
+      - edge-ok
+      - gate-egress
+
+  # On the network of OpenKnowledge and the gate: not in the range of the edge.
+  probe-neighbour:
+    <<: *probe
+    command: ["python", "-I", "/local-run/probe.py", "neighbour"]
+    networks:
+      - knowledge
+
+  # In the place of the agent.
+  probe-agent:
+    <<: *probe
+    command: ["python", "-I", "/local-run/probe.py", "agent"]
+    networks:
+      - knowledge-agent
+
+  # A service of another internal network of the stack.
+  probe-outsider:
+    <<: *probe
+    command: ["python", "-I", "/local-run/probe.py", "outsider"]
+    networks:
+      - llm
+
+networks:
+  # No route to the internet in the run. `compose.yaml` gives this network a route: it is
+  # the route of the gate to Entra ID. The stub issuer is on it here.
+  gate-egress:
+    internal: true
+
+volumes:
+  # The certificate of the stub issuer, in memory. The stub writes it; the gate and the
+  # probe read the file ca.pem.
+  local-run-tls:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=65534,gid=65534,mode=0755

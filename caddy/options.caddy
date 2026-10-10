@@ -1,0 +1,17 @@
+# The global options of the core edge. `start.sh` imports this file into the
+# global block of the configuration that it writes.
+
+# No admin API. A change of the configuration is a new start of the service.
+admin off
+# No copy of the configuration on the disk: `start.sh` writes it at each start.
+persist_config off
+
+# One certificate authority. Caddy gets one certificate for each public name
+# with the HTTP-01 or the TLS-ALPN-01 challenge, on the ports 80 and 443. It
+# reads no DNS key.
+acme_ca https://acme-v02.api.letsencrypt.org/directory
+
+servers {
+	# No HTTP/3: compose.caddy.yaml publishes no UDP port.
+	protocols h1 h2
+}

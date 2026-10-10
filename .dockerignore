@@ -1,0 +1,19 @@
+# No build of this repository uses the root as its context. The kit images build from
+# their own clones under kits/<kit>/ on the host. This file guards a build that starts
+# here by mistake.
+.git
+kits/
+.env
+.env.*
+!.env.example
+.local/
+data/
+secrets/
+state/
+**/authorized_keys
+**/*.pem
+**/*.key
+**/id_*
+*.snap
+*.tar
+*.tar.gz

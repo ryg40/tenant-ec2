@@ -1,0 +1,501 @@
+# tenant-ec2: the core of the Compose stack of the host. Six services on seven networks.
+#
+#   Gateway          litellm, litellm-db
+#   Memory           openviking
+#   Knowledge        open-knowledge, ok-auth (the gate)
+#   Agent            pi-durable
+#
+# This file is one of four. It is a complete model only together with one edge file:
+#
+#   compose.yaml            the core services. No edge and no port.
+#   compose.caddy.yaml      the core edge: `caddy`
+#   compose.pangolin.yaml   the option `pangolin`: `pangolin`, `gerbil` and `traefik`,
+#                           in place of the core edge
+#   compose.copilot.yaml    the option `copilot`: the service `copilot` and its routes
+#
+# `EC2_OPTIONS` of the environment file says which files are on. The bootstrap writes the
+# list into the name `COMPOSE_FILE` of the environment file of the host, and Compose
+# reads the name there. So a Compose command by hand from the clone uses the same files:
+#
+#   EC2_OPTIONS        COMPOSE_FILE
+#   (empty)            compose.yaml:compose.caddy.yaml
+#   copilot            compose.yaml:compose.caddy.yaml:compose.copilot.yaml
+#   pangolin           compose.yaml:compose.pangolin.yaml
+#   pangolin,copilot   compose.yaml:compose.pangolin.yaml:compose.copilot.yaml
+#
+# An option is a file, not a profile: Compose reads each value of each file that it loads,
+# also for a service that it does not start. With a file for each option, a name of an
+# option needs a value only when the option is on.
+#
+# Ports: no service of this file has a `ports:` entry. Only the edge publishes ports.
+#
+# Networks: each network joins only the services that need each other. A network that
+# needs no internet is `internal: true`: it has no route out of its bridge. The list is
+# at the end of this file.
+#
+#   Service          Networks
+#   litellm          db, llm, egress
+#   litellm-db       db
+#   openviking       llm, memory
+#   open-knowledge   knowledge, knowledge-agent
+#   ok-auth          knowledge, gate-egress
+#   pi-durable       llm, memory, egress, knowledge-agent
+#
+# - The edge file adds one small network to each service that has a public name: `edge-llm`
+#   to `litellm`, `edge-ok` to `ok-auth`, `edge-ov` to `openviking` and `edge-agent` to
+#   `pi-durable`. The only other member of such a network is the edge. `open-knowledge`
+#   and `litellm-db` get no edge network.
+# - A service reaches the gateway at `http://litellm:4000` on `llm` with its own virtual
+#   key. Only `litellm` reaches Postgres. No service holds a key of a model provider.
+# - The browser reaches OpenKnowledge only through the gate: the edge sends the name `ok`
+#   to `ok-auth`, and `ok-auth` calls `open-knowledge` on `knowledge`. The agent does not
+#   pass the gate: it calls `open-knowledge` on `knowledge-agent`, which has these two
+#   services only.
+# - Two networks of this file have a route to the internet: `egress` and `gate-egress`.
+#   The one member of `gate-egress` is `ok-auth`: it is the route of the gate to Entra
+#   ID. The edge file adds one more such network: `edge-core`. A member of one of the
+#   three also reaches the instance metadata address, through the host. The metadata
+#   guard of the host closes that path (`scripts/host-metadata-guard.sh`): a drop rule
+#   in the chain `DOCKER-USER`, with one exception for the gateway. The exception is one
+#   static rule for the fixed address of `litellm` on `egress`. This file gives that
+#   address, and the bootstrap reads it from this file.
+# - The members of `egress` reach each other on it: the gateway, the agent and, with the
+#   option `copilot`, the Copilot service. So the agent reaches the port of the gateway
+#   and of the Copilot service there, each behind its own key. One network for each
+#   member closes that path. That is not done here.
+#
+# Hardening: each service drops each capability and sets `no-new-privileges`.
+#
+# Storage: the data volume is at /srv/data and the file system is at /srv/efs. The
+# bootstrap makes each directory below them before the first start. Each mount below
+# them has the long form with `create_host_path: false`: Docker then makes no host
+# directory, and a service with a missing directory does not start. So a data volume or
+# an access point that is not mounted gives an error, not an empty directory on the root
+# disk.
+# A container with no capability writes only where its own user is the owner. So the
+# owner of each directory is a part of the contract with the bootstrap:
+#   /srv/data/litellm-db          999:999, mode 0700 (the user `postgres` of the image)
+#   /srv/data/pi-durable          1000:1000
+# Each other Compose file gives the directories of its own services.
+#
+# Variables: each name comes from the environment file and is in `.env.example`. The form
+# `${NAME:?...}` stops Compose when the file lacks the name or holds an empty value. So
+# `.env.example` alone renders no file set: `scripts/check.sh` renders each file set with
+# a stub value for each empty name that the set needs. Compose cannot refuse a
+# placeholder value: the bootstrap must do that before it starts the stack. The form
+# `${NAME:-...}` is only on the two web search names of the agent: an empty value is a
+# correct state there.
+#
+# Images: a kit image has the name of `kits.lock` and is built on the host, so
+# `pull_policy: never` makes a missing image an error. Postgres has the tag of
+# `kits.lock`. The gate image has the tag and the digest of `kits.lock`.
+
+services:
+  # ===== Gateway =====
+
+  # The gateway. Routes: `litellm/config.yaml`, the routes `bedrock/luna` and
+  # `bedrock/embed`. The two routes have no key: the gateway reads the instance role from
+  # the instance metadata address.
+  # It must reach Bedrock, so it is on `egress`. That network also gives it the path to
+  # the metadata address, through the host.
+  # Its address on `egress` is fixed. The metadata guard of the host lets only this
+  # address reach the metadata address, and the bootstrap reads the address from the
+  # line `ipv4_address` below. Keep it inside `subnet` and outside `ip_range` of the
+  # network `egress`.
+  # The option `copilot` adds two routes, one network and one key to this service
+  # (compose.copilot.yaml). This file has no route to the service `copilot`.
+  litellm:
+    # kits.lock: server_kits.litellm.image.
+    image: litellm-gateway:1.103.0-p0.4.1
+    pull_policy: never
+    restart: unless-stopped
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--config", "/config/config.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      HOME: /tmp
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      LITELLM_TELEMETRY: "False"
+      LITELLM_DISABLE_NO_REDIS_WARNING: "true"
+      # Keep the UI-login restriction with this kit pin.
+      # Not verified: the identity or affected range of GHSA-7hp6-4w63-5g45.
+      # This setting does not establish gateway safety. Make no internal user of the
+      # gateway until the version evidence and runtime checks receive review.
+      EXPERIMENTAL_UI_LOGIN: "false"
+      LITELLM_MASTER_KEY: ${EC2_LITELLM_MASTER_KEY:?add a value to .env (.env.example)}
+      LITELLM_SALT_KEY: ${EC2_LITELLM_SALT_KEY:?add a value to .env (.env.example)}
+      UI_USERNAME: ${EC2_LITELLM_UI_USERNAME:?add a value to .env (.env.example)}
+      UI_PASSWORD: ${EC2_LITELLM_UI_PASSWORD:?add a value to .env (.env.example)}
+      # The database secret stays an environment value. The Postgres image can read it
+      # from a file (POSTGRES_PASSWORD_FILE), but LiteLLM 1.103.0 reads the database
+      # address only from DATABASE_URL or from other environment names. A file on one
+      # side only does not take the value out of the environment of the gateway.
+      DATABASE_URL: postgresql://litellm:${EC2_LITELLM_POSTGRES_PASSWORD:?add a value to .env (.env.example)}@litellm-db:5432/litellm
+      # The route `bedrock/luna`: the inference profile and the region. No AWS key.
+      # `converse/` selects the Converse API of Bedrock. The second name is the same
+      # profile with no prefix: `model_info.id` of the route (litellm/config.yaml).
+      BEDROCK_LUNA_MODEL: bedrock/converse/${EC2_BEDROCK_LUNA_MODEL:?add a value to .env (.env.example)}
+      BEDROCK_LUNA_MODEL_ID: ${EC2_BEDROCK_LUNA_MODEL:?add a value to .env (.env.example)}
+      # The route `bedrock/embed`: the embedding model, in the same region. No AWS key.
+      BEDROCK_EMBED_MODEL: bedrock/${EC2_BEDROCK_EMBED_MODEL:?add a value to .env (.env.example)}
+      AWS_REGION_NAME: ${EC2_AWS_REGION:?add a value to .env (.env.example)}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - ./litellm/config.yaml:/config/config.yaml:ro
+    networks:
+      db: {}
+      llm: {}
+      egress:
+        ipv4_address: 198.18.4.2
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+    healthcheck:
+      # python -S loads no site module, so the check imports no LiteLLM code.
+      test: ["CMD", "python", "-S", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # Postgres of the gateway, on the data volume. Its one client is the gateway, on the
+  # network `db`.
+  # It runs as the user `postgres` of the image (999:999), not as root. The entry script
+  # of the image then changes no owner and no user, so the service needs no capability.
+  # The bootstrap makes the data directory with that owner and mode 0700.
+  litellm-db:
+    # kits.lock: support_images.postgres.
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+    restart: unless-stopped
+    user: "999:999"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      # An environment value, not a file: see DATABASE_URL of the service `litellm`.
+      POSTGRES_PASSWORD: ${EC2_LITELLM_POSTGRES_PASSWORD:?add a value to .env (.env.example)}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/data/litellm-db
+        target: /var/lib/postgresql/data
+        bind: { create_host_path: false }
+    networks:
+      - db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ===== Memory =====
+
+  # OpenViking: a new instance with empty data on its access point. The server reads
+  # `ov.conf` and expands each `${NAME}` in it from this environment. Its embedding and
+  # vision calls go to the gateway with its virtual key.
+  # Three settings name the two routes and the vector size of the embedding model:
+  # `bedrock/embed` with 1024 values and `bedrock/luna` in the core. OpenViking does not
+  # send the vector size to the gateway: it must be the size that the model gives.
+  # The vector size is between quotes in `ov.conf`. A second reader of the server reads
+  # the file before the names get their values, so the file must be JSON text as it is.
+  # OpenViking 0.2.0 reads the text of the size as a number, and it stops on another text.
+  # The vision block of `ov.conf` sets `temperature` to 1. The default of the kit is 0.0,
+  # and LiteLLM refuses a value other than 1 for GPT-6 Luna while reasoning is active.
+  #
+  # The bot is off. The bot of the kit has a shell tool that runs a command in this
+  # container, with the environment of the server, for each holder of one user key.
+  # The entry script starts the bot when it gets no word about it, so this file gives
+  # the word two times: the argument `--without-bot` and OPENVIKING_WITH_BOT.
+  # Do not start the bot on this host without a backend that is isolated from the
+  # server and its keys.
+  openviking:
+    # kits.lock: server_kits.openviking.image.
+    image: openviking:0.2.0-local
+    pull_policy: never
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--without-bot"]
+    environment:
+      OPENVIKING_WITH_BOT: "0"
+      OPENVIKING_ROOT_API_KEY: ${EC2_OPENVIKING_ROOT_API_KEY:?add a value to .env (.env.example)}
+      OPENVIKING_LITELLM_API_KEY: ${EC2_OPENVIKING_LITELLM_API_KEY:?add a value to .env (.env.example)}
+      # The three names of `ov.conf` for the model calls.
+      OPENVIKING_EMBED_MODEL: ${EC2_OPENVIKING_EMBED_MODEL:?add a value to .env (.env.example)}
+      OPENVIKING_EMBED_DIMENSION: ${EC2_OPENVIKING_EMBED_DIMENSION:?add a value to .env (.env.example)}
+      OPENVIKING_VLM_MODEL: ${EC2_OPENVIKING_VLM_MODEL:?add a value to .env (.env.example)}
+      OPENVIKING_PUBLIC_BASE_URL: https://ov.${EC2_DOMAIN:?add a value to .env (.env.example)}
+      OPENVIKING_SERVER_HOST: 0.0.0.0
+      OPENVIKING_SERVER_PORT: "1933"
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/efs/openviking
+        target: /app/.openviking
+        bind: { create_host_path: false }
+      # The file holds no secret value.
+      - ./openviking/ov.conf:/app/.openviking/ov.conf:ro
+      - type: bind
+        source: /srv/efs/shared
+        target: /shared
+        bind: { create_host_path: false }
+    networks:
+      - llm
+      - memory
+    healthcheck:
+      test: ["CMD", "openviking-entrypoint", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ===== Knowledge =====
+
+  # OpenKnowledge: a new instance with empty data on its access point. The server has no
+  # login. With OK_ALLOW_EXTERNAL it admits each client address, and its one test is the
+  # `Host` header, which the client sets. So the network is the control. This service is
+  # on two networks, and each one has one other member:
+  #   knowledge         the gate `ok-auth`. Each request of a browser comes through it.
+  #   knowledge-agent   the agent `pi-durable`. The gate is a login of a browser, so the
+  #                     agent cannot pass it (docs/entra.md, "The path of the agent").
+  # No other service reaches this service. Both networks are internal, so it has no route
+  # to the internet.
+  #
+  # Port 80 and the alias: the server admits a request only when its `Host` header is the
+  # host of OK_EXTERNAL_URL, with no port or with the port 80 or 443. A request to the
+  # name `open-knowledge` gets the status 403.
+  # - The gate passes the `Host` header of the browser, so its upstream is this service by
+  #   its service name.
+  # - The agent sends the `Host` header of its URL. So this service has the public name as
+  #   an alias on `knowledge-agent`, and the agent calls `http://ok.<domain>/mcp`. Only on
+  #   that network does the name go to this container. The call is plain HTTP between two
+  #   containers of the host. It does not leave the host and does not pass the edge.
+  # The image runs as the user 10001. Docker lets each user of a container bind a port
+  # below 1024.
+  open-knowledge:
+    # kits.lock: server_kits.open-knowledge.image.
+    image: open-knowledge:0.83.2-p0.3.2
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      PORT: "80"
+      OK_BIND: 0.0.0.0
+      OK_ALLOW_EXTERNAL: "1"
+      OK_EXTERNAL_URL: https://ok.${EC2_DOMAIN:?add a value to .env (.env.example)}
+      OK_IDLE_SHUTDOWN: "off"
+      DO_NOT_TRACK: "1"
+      OK_LOG_LEVEL: warn
+      OK_MCP_AUTOSTART: "0"
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/efs/open-knowledge
+        target: /data
+        bind: { create_host_path: false }
+      - type: bind
+        source: /srv/efs/shared
+        target: /shared
+        bind: { create_host_path: false }
+    networks:
+      knowledge: {}
+      knowledge-agent:
+        aliases:
+          - ok.${EC2_DOMAIN:?add a value to .env (.env.example)}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:80/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+
+  # The gate of OpenKnowledge: oauth2-proxy with Microsoft Entra ID (docs/entra.md). It is
+  # the only target of the public name `ok`, and OpenKnowledge is its only upstream. A
+  # request with no session goes to the login of Entra ID. A user passes only as a member
+  # of the one security group of EC2_OK_ENTRA_GROUP_ID, in the one tenant of
+  # EC2_OK_ENTRA_TENANT_ID.
+  #
+  # Settings: `ok-auth/oauth2-proxy.cfg` holds each fixed setting: the listener on port
+  # 4180 with plain HTTP, the cookie, the trust in the edge, the upstream. The seven names
+  # below are the values of one install. Do not add an OAUTH2_PROXY_ name here: a value of
+  # the environment wins over the file. The two secrets are environment values, as each
+  # secret of this stack. No argument of the command holds one.
+  #
+  # Networks:
+  #   knowledge     OpenKnowledge, the upstream.
+  #   gate-egress   the route to Entra ID. oauth2-proxy reads the keys of the tenant and
+  #                 changes the code of a login for a token there. No other service is on
+  #                 this network, so the gate is on no network with the gateway or the
+  #                 agent.
+  # The edge network `edge-ok` is not here: each edge file adds it. The gate reads a
+  # forwarded header only from the range of that network (`trusted_proxy_ips` of the
+  # settings file). So that network has the fixed range 198.18.5.0/29 in each edge file,
+  # and its members are the edge and this service only.
+  #
+  # Image: the digest is the pin; the tag tells the reader the version. Both are in
+  # kits.lock (support_images.oauth2-proxy). The image has no user of its own, so the user
+  # is set here. The service writes no file: its root file system is read-only.
+  ok-auth:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine@sha256:8e4bec4f9fe4de10de63070209204075e4407503170aa19893d6e8d99f083d1b
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--config", "/etc/oauth2-proxy/oauth2-proxy.cfg"]
+    environment:
+      # The issuer of one tenant. Never the issuer `common`.
+      OAUTH2_PROXY_OIDC_ISSUER_URL: https://login.microsoftonline.com/${EC2_OK_ENTRA_TENANT_ID:?add a value to .env (.env.example)}/v2.0
+      OAUTH2_PROXY_CLIENT_ID: ${EC2_OK_OIDC_CLIENT_ID:?add a value to .env (.env.example)}
+      OAUTH2_PROXY_CLIENT_SECRET: ${EC2_OK_OIDC_CLIENT_SECRET:?add a value to .env (.env.example)}
+      OAUTH2_PROXY_COOKIE_SECRET: ${EC2_OK_COOKIE_SECRET:?add a value to .env (.env.example)}
+      # The object id of the one security group.
+      OAUTH2_PROXY_ALLOWED_GROUPS: ${EC2_OK_ENTRA_GROUP_ID:?add a value to .env (.env.example)}
+      OAUTH2_PROXY_REDIRECT_URL: https://ok.${EC2_DOMAIN:?add a value to .env (.env.example)}/oauth2/callback
+      # The one host name that a redirect after the login can have.
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ok.${EC2_DOMAIN:?add a value to .env (.env.example)}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      # The file holds no secret value.
+      - ./ok-auth/oauth2-proxy.cfg:/etc/oauth2-proxy/oauth2-proxy.cfg:ro
+    networks:
+      - knowledge
+      - gate-egress
+    depends_on:
+      open-knowledge:
+        condition: service_started
+    healthcheck:
+      # The ready path of oauth2-proxy needs no session. The image has the wget of BusyBox.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4180/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ===== Agent =====
+
+  # The pi-durable agent. Model: the gateway route of EC2_PI_DURABLE_MODEL at reasoning
+  # effort `xhigh` only. The route is `bedrock/luna` in the core. Its SQLite storage is
+  # on the data volume; the image runs as uid 1000.
+  # The image has the release name of kits.lock. The source pin is still empty.
+  # The bootstrap starts no agent until the promotion adds that pin.
+  #
+  # Memory: the agent calls OpenViking with a user key of its own, in OPENVIKING_API_KEY.
+  # It never holds the root key: OpenViking 0.2.0 refuses a root key on each data path
+  # that the agent calls (search, content, sessions), and a root key in the agent gives
+  # the admin API to each tool of the agent.
+  # OpenViking makes a user key itself, so the key exists only after the first start of
+  # OpenViking. The bootstrap or the credentials ticket makes it one time: it starts
+  # `openviking`, makes one account for the agent through the admin API with the root
+  # key, and saves the user key under EC2_PI_DURABLE_OPENVIKING_API_KEY. Compose reads
+  # each name for each command, so that first start of `openviking` needs a value of the
+  # name in the shell of the one command. That value reaches no container: the agent is
+  # not started by that command.
+  #
+  # Knowledge: the agent calls OpenKnowledge on the network `knowledge-agent`, which has
+  # these two services only. It does not pass the edge or the gate, and it holds no
+  # credential of Entra ID (docs/entra.md, "The path of the agent"). OpenKnowledge has no
+  # login, so the agent reads and changes each page. The URL has the public name: the
+  # service `open-knowledge` says why.
+  #
+  # Web search: off by default. The agent then reads no web search value and has no web tool.
+  # With `mcp`, it calls an MCP server that the installer names.
+  # The two web search names supply its address and bearer. Both can be empty with `off`.
+  pi-durable:
+    # kits.lock: server_kits.pi-durable.image.
+    image: pi-durable:1.0.0-p0.1.0
+    pull_policy: never
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      RESEARCHER_DATA_DIR: /data
+      RESEARCHER_API_KEY: ${EC2_PI_DURABLE_API_KEY:?add a value to .env (.env.example)}
+      LITELLM_BASE_URL: http://litellm:4000/v1
+      LITELLM_API_KEY: ${EC2_PI_DURABLE_LITELLM_API_KEY:?add a value to .env (.env.example)}
+      RESEARCHER_MODEL: ${EC2_PI_DURABLE_MODEL:?add a value to .env (.env.example)}
+      RESEARCHER_THINKING: ${EC2_PI_DURABLE_THINKING:?add a value to .env (.env.example)}
+      OPENVIKING_URL: http://openviking:1933
+      # A user key of OpenViking, never the root key.
+      OPENVIKING_API_KEY: ${EC2_PI_DURABLE_OPENVIKING_API_KEY:?add a value to .env (.env.example)}
+      # The web search of the agent: `off` or `mcp`.
+      RESEARCHER_WEB_SEARCH: ${EC2_PI_DURABLE_WEB_SEARCH:?add a value to .env (.env.example)}
+      # The agent reads the two names only with the web search `mcp`.
+      WEB_SEARCH_MCP_URL: ${EC2_PI_DURABLE_WEB_SEARCH_MCP_URL:-}
+      WEB_SEARCH_MCP_TOKEN: ${EC2_PI_DURABLE_WEB_SEARCH_MCP_TOKEN:-}
+      # The public name is an alias of `open-knowledge` on `knowledge-agent`. Plain HTTP,
+      # port 80: the call stays on that network.
+      OPENKNOWLEDGE_MCP_URL: http://ok.${EC2_DOMAIN:?add a value to .env (.env.example)}/mcp
+      # The time zone of the runtime of the image, as for each other service.
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - type: bind
+        source: /srv/data/pi-durable
+        target: /data
+        bind: { create_host_path: false }
+      - type: bind
+        source: /srv/efs/shared
+        target: /shared
+        bind: { create_host_path: false }
+    networks:
+      - llm
+      - memory
+      - egress
+      - knowledge-agent
+    depends_on:
+      litellm:
+        condition: service_started
+      openviking:
+        condition: service_started
+    healthcheck:
+      # The API answers 401 without the bearer. That proves the process, with no model
+      # call. Do not use `/healthz` here: that path makes a model call.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5470/v1/').then(r=>process.exit(r.status===401?0:1),()=>process.exit(1))"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  # The edge file gives the edge networks (`edge-core`, `edge-llm`, `edge-ok`, `edge-ov`
+  # and `edge-agent`) and joins each service to its one. compose.copilot.yaml gives the
+  # network `copilot`.
+
+  # The gateway and its Postgres.
+  db:
+    internal: true
+  # The gateway and the two services that call a model.
+  llm:
+    internal: true
+  # OpenViking and its one client, the agent.
+  memory:
+    internal: true
+  # OpenKnowledge and its gate.
+  knowledge:
+    internal: true
+  # OpenKnowledge and the agent. The gate is not on it.
+  knowledge-agent:
+    internal: true
+  # The route of the gate to Entra ID. Its one member is `ok-auth`. It is not internal.
+  # The metadata guard of the host closes the metadata address for it, as for each
+  # container but the gateway.
+  gate-egress:
+  # The route to the internet: Bedrock for `litellm`, the web for `pi-durable`, and
+  # GitHub for `copilot` with the option `copilot`. No other service is on it.
+  # The range is fixed, because the metadata guard of the host has one static rule for
+  # the address of `litellm`. Docker gives an address of `ip_range` to a member with no
+  # fixed address. The address of `litellm` is outside `ip_range`, so no other container
+  # gets it, also while `litellm` does not run.
+  # The range is a part of 198.18.0.0/15, the range for network tests (RFC 2544). It is
+  # not a private range of RFC 1918, and no default range of Docker holds it. Keep the
+  # range of the VPC (`EC2_VPC_CIDR`) outside 198.18.0.0/15: an overlap takes a part of
+  # the VPC away from the host.
+  egress:
+    ipam:
+      config:
+        - subnet: 198.18.4.0/24
+          gateway: 198.18.4.1
+          ip_range: 198.18.4.128/25

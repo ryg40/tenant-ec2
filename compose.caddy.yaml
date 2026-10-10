@@ -1,0 +1,139 @@
+# tenant-ec2: the core edge of the Compose stack. One service: `caddy`.
+#
+# This file is an overlay. It is a valid model only together with compose.yaml:
+#   docker compose -f compose.yaml -f compose.caddy.yaml ...
+# The bootstrap puts it into `COMPOSE_FILE` when `EC2_OPTIONS` does not hold `pangolin`.
+# Never load it together with compose.pangolin.yaml: the two edges publish the same ports.
+#
+# Ports: `caddy` publishes 80 and 443, and no UDP port. No other service has a `ports:`
+# entry.
+#
+# Public names: `EC2_EDGE_NAMES` is the list. The edge makes one route for each name of
+# the list and no other route (`caddy/`):
+#
+#   Name    Target             Who reaches it
+#   ok      ok-auth:4180       each address; the gate is the login
+#   llm     litellm:4000       the range of EC2_ADMIN_CIDR; the five model paths only
+#   ov      openviking:1933    the range of EC2_ADMIN_CIDR
+#   agent   pi-durable:5470    the range of EC2_ADMIN_CIDR; not `/` and not `/healthz`
+#
+# Certificates: one certificate for each name of the list, from the HTTP-01 or the
+# TLS-ALPN-01 challenge. So each name needs an A record to the address of the host
+# before the first start, and the ports 80 and 443 must be open. The host holds no DNS
+# key.
+#
+# Networks:
+#
+#   Service   Networks
+#   caddy     edge-core, edge-llm, edge-ok, edge-ov, edge-agent
+#
+# - A service that has a public name shares one small network with `caddy`. `caddy`
+#   joins each of the four networks, also for a name that is not in the list: it has no
+#   route to that service then, but it is on a network with it.
+# - `edge-core` has a route to the internet. The metadata guard of the host closes the
+#   instance metadata address for its members (`scripts/host-metadata-guard.sh`).
+#
+# Storage: the certificate store is on the data volume. The bootstrap makes the directory:
+#   /srv/data/caddy               1000:1000, mode 0700
+
+services:
+  # Caddy: ends TLS for each public name and sends each request to one service.
+  # `caddy/start.sh` is its command: it tests the settings, writes the configuration for
+  # the names of EC2_EDGE_NAMES and starts Caddy. The directory `caddy/` is read-only in
+  # the container. The settings are no secret. A change of a setting makes a new
+  # container at the next `docker compose up`.
+  #
+  # User and capabilities: the service runs as the user 1000, not as root. The binary of
+  # the image has the file capability NET_BIND_SERVICE. The kernel refuses to start such
+  # a binary when the capability is not in the bounding set of the container, so
+  # `cap_add` gives that one capability back. The process does not hold it: the user is
+  # not root, and `no-new-privileges` is set. Docker lets each user bind a port below
+  # 1024 in the network namespace of a container.
+  caddy:
+    # kits.lock: support_images.caddy. The digest is the pin; the tag tells the reader
+    # the version.
+    image: caddy:2.11.7@sha256:f2a1290d0463aad60660d4ec134943f183ee2a5f6c3eb7bf32dd984f2f020772
+    restart: unless-stopped
+    user: "1000:1000"
+    cap_drop: [ALL]
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt: ["no-new-privileges:true"]
+    command: ["sh", "/etc/caddy/start.sh"]
+    environment:
+      EC2_DOMAIN: ${EC2_DOMAIN:?add a value to .env (.env.example)}
+      EC2_EDGE_NAMES: ${EC2_EDGE_NAMES:?add a value to .env (.env.example)}
+      EC2_ADMIN_CIDR: ${EC2_ADMIN_CIDR:?add a value to .env (.env.example)}
+      # The address of the certificate account. An empty value is a correct state: Caddy
+      # then makes an account with no address.
+      EC2_ACME_EMAIL: ${EC2_ACME_EMAIL:-}
+      TZ: ${EC2_TZ:?add a value to .env (.env.example)}
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      # The certificate store. It outlives the instance with the data volume.
+      - type: bind
+        source: /srv/data/caddy
+        target: /data
+        bind: { create_host_path: false }
+    ports:
+      - "443:443"
+      - "80:80"
+    networks:
+      # The published ports and the route to the certificate authority are on
+      # `edge-core`: it is the only network of this service that is not internal.
+      edge-core: {}
+      edge-llm: {}
+      edge-ok: {}
+      edge-ov: {}
+      edge-agent: {}
+    healthcheck:
+      # The listener of `caddy/common.caddy` on the loopback address.
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8082/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ===== The services of the core that have a public name =====
+  # Each one joins its edge network. Compose adds the network to the networks that
+  # compose.yaml gives the service.
+
+  litellm:
+    networks:
+      edge-llm: {}
+
+  # The gate is the only target of the name `ok`. OpenKnowledge joins no edge network.
+  ok-auth:
+    networks:
+      edge-ok: {}
+
+  openviking:
+    networks:
+      edge-ov: {}
+
+  pi-durable:
+    networks:
+      edge-agent: {}
+
+networks:
+  # The edge networks. An edge file gives them, so the core has no network with an edge.
+  # The edge: the published ports and the route to the internet. It is not internal.
+  # `caddy` publishes the two ports through it, and it reaches the certificate authority
+  # through it. No other service is on it.
+  edge-core:
+  # One network for each service that has a public name: the edge and the one service.
+  edge-llm:
+    internal: true
+  # The range of `edge-ok` is fixed: the gate reads a forwarded header only from a
+  # member of this range (`trusted_proxy_ips` of ok-auth/oauth2-proxy.cfg), and the edge
+  # is the only other member. Keep the range equal in the two edge files and in that
+  # file. It is a part of 198.18.0.0/15, as the range of the network `egress`.
+  edge-ok:
+    internal: true
+    ipam:
+      config:
+        - subnet: 198.18.5.0/29
+  edge-ov:
+    internal: true
+  edge-agent:
+    internal: true

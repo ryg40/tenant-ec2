@@ -1,0 +1,52 @@
+# Configuration of the service `copilot` (compose.copilot.yaml, the option `copilot`): the
+# provider `github_copilot/` of LiteLLM with the token files of one GitHub Copilot account.
+# `model_name` is the alias that the gateway calls as `litellm_proxy/<alias>`
+# (litellm/config.copilot.yaml). Keep only an id that the account has: the models command
+# of the login script of the kit prints the ids.
+#
+# GPT-6 Luna runs at reasoning effort `xhigh` only (AGENTS.md). Do not lower it.
+# Do not add `drop_params`.
+model_list:
+  # `model_info` has the form of the Copilot document of the kit for an id that the cost
+  # map of the provider lacks. `mode: responses` sends the request to `/responses`:
+  # without it LiteLLM uses `/chat/completions`. `id` is the model id with no provider,
+  # and only this entry can have it. The block has no `litellm_provider`: with a value
+  # the lookup of `mode` or the parameter check fails. The two costs are 0: the account
+  # has a subscription, not a price for each token.
+  # LiteLLM refuses a `temperature` other than 1 for this model while reasoning is
+  # active. A client of the route must send 1 or no temperature (openviking/ov.conf).
+  - model_name: luna
+    litellm_params:
+      model: github_copilot/gpt-6-luna
+      reasoning_effort: xhigh
+      timeout: 540
+      stream_timeout: 540
+    model_info:
+      id: gpt-6-luna
+      mode: responses
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+      supports_function_calling: true
+      supports_tool_choice: true
+      supports_reasoning: true
+
+  # The embedding id that the kit verified with a live request (1536 values).
+  - model_name: embed
+    litellm_params:
+      model: github_copilot/text-embedding-ada-002
+      timeout: 540
+      stream_timeout: 540
+    model_info:
+      mode: embedding
+      output_vector_size: 1536
+
+general_settings:
+  master_key: os.environ/COPILOT_MASTER_KEY
+  disable_spend_logs: true
+
+litellm_settings:
+  request_timeout: 540
+  num_retries: 0
+  set_verbose: false
+  # Without it the provider changes each system message into an assistant message.
+  disable_copilot_system_to_assistant: true

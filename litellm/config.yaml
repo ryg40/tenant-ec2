@@ -1,0 +1,79 @@
+# Route file of the gateway (service `litellm` of compose.yaml): the routes of the core.
+# Explicit routes only. No wildcard route and no key of a model provider.
+# LiteLLM resolves each `os.environ/<NAME>` value from the container environment at start.
+# compose.yaml sets the names:
+#   BEDROCK_LUNA_MODEL     `bedrock/converse/` and the inference profile, from EC2_BEDROCK_LUNA_MODEL.
+#   BEDROCK_LUNA_MODEL_ID  The inference profile with no prefix, from the same name.
+#   BEDROCK_EMBED_MODEL    `bedrock/` and the embedding model, from EC2_BEDROCK_EMBED_MODEL.
+#   AWS_REGION_NAME        The region of the two models, from EC2_AWS_REGION.
+#   LITELLM_MASTER_KEY     The master key of the gateway, from EC2_LITELLM_MASTER_KEY.
+#
+# The two routes have no key: the credential is the instance role of the host.
+# The option `copilot` adds two routes in a file of its own, `config.copilot.yaml`. That
+# file includes this file. This file has no route to the service `copilot`.
+#
+# GPT-6 Luna runs at reasoning effort `xhigh` only (AGENTS.md). Each Luna route sets that
+# effort for a request that names none. Do not lower it. Do not add `drop_params`.
+model_list:
+  # The model of each agent: GPT-6 Luna through Amazon Bedrock.
+  #
+  # The cost map of LiteLLM 1.103.0 does not have the profile `us.openai.gpt-6-luna`.
+  # Without `converse/` the request takes the Invoke API, and LiteLLM refuses
+  # `reasoning_effort`, `tools` and `tool_choice`. With `converse/` it takes the Converse
+  # API, and `reasoning_effort` goes to Bedrock as `reasoning.effort`.
+  # `model_info` gives the flags that the cost map lacks. `id` is necessary: LiteLLM
+  # reads the flags from the cost map by the profile with no prefix, and `id` is the key
+  # that it registers. Without `id` it refuses `tools` and `tool_choice`. Only this entry
+  # can have the id.
+  # The block has no price, so the gateway reports cost 0 for this route.
+  - model_name: bedrock/luna
+    litellm_params:
+      model: os.environ/BEDROCK_LUNA_MODEL
+      aws_region_name: os.environ/AWS_REGION_NAME
+      reasoning_effort: xhigh
+      timeout: 570
+      stream_timeout: 570
+    model_info:
+      id: os.environ/BEDROCK_LUNA_MODEL_ID
+      mode: chat
+      supports_function_calling: true
+      supports_tool_choice: true
+      supports_reasoning: true
+      supports_xhigh_reasoning_effort: true
+
+  # The embedding route of OpenViking (openviking/ov.conf), through Amazon Bedrock.
+  # The first choice of the kit is `amazon.titan-embed-text-v2:0`: the cost map of
+  # LiteLLM 1.103.0 has it, and it gives 1024 values for a request that names no size.
+  # OpenViking names no size, so EC2_OPENVIKING_EMBED_DIMENSION must be the size that
+  # the model gives. The instance role must have the right to invoke the model.
+  - model_name: bedrock/embed
+    litellm_params:
+      model: os.environ/BEDROCK_EMBED_MODEL
+      aws_region_name: os.environ/AWS_REGION_NAME
+      timeout: 570
+      stream_timeout: 570
+    model_info:
+      mode: embedding
+
+# The login of the UI. The kit gives the UI one login: the pair UI_USERNAME and
+# UI_PASSWORD of the environment (the document EXPLAINER.md of the kit). So
+# `disable_env_credential_login` is not set here: with `true`, the UI has no login at all.
+# The edge is the gate in front of that login:
+# - The core edge serves the five model paths of the name `llm` and no other path
+#   (caddy/sites/llm.caddy). So `/ui`, the login routes and the admin API have no route
+#   from the internet.
+# - With the option `pangolin`, the resource `llm` serves only the model paths without
+#   the login of Pangolin (pangolin/blueprint.yaml), so `/ui`, the login routes and the
+#   admin API need the login of Pangolin first.
+# Set `disable_env_credential_login: true` when the owner does the admin work with the
+# master key only and does not use the UI.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  request_timeout: 600
+  num_retries: 0
+  set_verbose: false
+
+router_settings:
+  num_retries: 0

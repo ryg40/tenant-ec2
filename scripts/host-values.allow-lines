@@ -1,0 +1,7 @@
+# Accepted host-value lines in the publish set. Format: <path><TAB><sha256 of the exact line text without the line end>.
+# A maintainer accepts each line by hash and writes the reason in docs/secret-handling.md,
+# section "Accepted host values in the publish set". A changed line is a finding again.
+# Print the entries of the current findings: python3 scripts/publish_check.py --public --hashes
+# Compute one hash: sed -n '<line>p' <path> | tr -d '\n' | sha256sum   (macOS: shasum -a 256)
+#
+# The list holds no line now.

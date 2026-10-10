@@ -1,0 +1,7 @@
+# The public name `ok`: OpenKnowledge behind its gate. The gate is the login,
+# so each address reaches this name. The one target is the gate: the edge is on
+# no network with OpenKnowledge.
+ok.{$EC2_DOMAIN} {
+	import public-name
+	reverse_proxy ok-auth:4180
+}

@@ -1,0 +1,34 @@
+# The parts that each public name of the core edge uses, and the two sites
+# that are no public name. `start.sh` imports this file one time.
+
+# For each public name: a browser keeps HTTPS for the name for one year.
+(public-name) {
+	header Strict-Transport-Security "max-age=31536000"
+}
+
+# Refuse a request whose path is not in its plain form. A site with a path
+# rule imports this part before the rule.
+# Caddy compares a path rule with the path after it resolves `.` and `..` and
+# merges each `//`. It sends the path to the service as the client wrote it. A
+# service can read that text in another way: for the agent, `//x/healthz` and
+# `/x\..\healthz` are the path `/healthz`. So the edge stops, with the status
+# 400, a path that holds one of these texts:
+#   //   \   a part `.` or `..`   %2e   %2f   %5c
+# The test reads the request target as the client sent it. The query is not a
+# part of the test.
+(plain-path) {
+	@not-plain vars_regexp {http.request.orig_uri} `^[^?]*(//|\\|/\.\.?(/|\?|$)|%2[EeFf]|%5[Cc])`
+	respond @not-plain 400
+}
+
+# The health check of the container. Loopback only: the port is not published.
+http://127.0.0.1:8082 {
+	bind 127.0.0.1
+	respond 200
+}
+
+# A name that is not in EC2_EDGE_NAMES has no route: the edge answers 404 and
+# sends the request to no service. Caddy asks for no certificate for it.
+:80, :443 {
+	respond 404
+}

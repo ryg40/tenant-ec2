@@ -1,0 +1,75 @@
+#!/bin/sh
+# pre-commit: run the static checks with scripts/check.sh, then scan the
+# staged changes with scripts/scan.sh.
+# pre-merge-commit runs this file too (HOOK_NAME=pre-merge-commit).
+# Install with scripts/install-hooks.sh. See docs/secret-handling.md.
+#
+# A finding of a static check or a missing tool refuses the commit. The
+# checks run first, then the scan. The checks run with no network call and
+# without their own scan of the tree, because the scan of this hook follows.
+# They run without the local run of the gate (CHECK_NO_LOCAL_RUN=1): that run
+# makes a Docker network with a fixed range, so two commits at the same time
+# on one machine would not work. Run `sh scripts/check.sh` by hand for it.
+# The checks read the index, not the working tree: the hook exports the index
+# into a temporary directory and runs the scripts/check.sh of that copy from
+# inside it. Thus a staged finding refuses the commit also when the working
+# tree is correct, and a file that is not staged changes nothing.
+# A secret or a policy finding refuses the commit. A host value refuses the
+# commit on the branch portable; on other branches it prints a warning.
+
+set -eu
+
+name=${HOOK_NAME:-pre-commit}
+top=$(git rev-parse --show-toplevel)
+
+copy=$(mktemp -d "${TMPDIR:-/tmp}/$name.XXXXXX")
+trap 'rm -rf "$copy"' EXIT
+# In sh, a signal handler does not end the script; exit runs the EXIT trap.
+trap 'exit 130' INT TERM HUP
+# Git gives the index of the commit to the hook, also for `git commit -a` and
+# for `git commit <path>`.
+git checkout-index --all --prefix="$copy/" || {
+    echo "$name: git checkout-index cannot export the index; commit refused" >&2
+    exit 1
+}
+
+if [ -f "$copy/scripts/check.sh" ]; then
+    (cd "$copy" && CHECK_OFFLINE=1 CHECK_NO_SCAN=1 CHECK_NO_LOCAL_RUN=1 sh "$copy/scripts/check.sh" </dev/null) || {
+        echo "$name: commit refused (scripts/check.sh)" >&2
+        exit 1
+    }
+elif git cat-file -e :scripts/check.sh 2>/dev/null || git cat-file -e HEAD:scripts/check.sh 2>/dev/null; then
+    # Fail closed: the script is gone from the copy, but the branch has it.
+    echo "$name: scripts/check.sh is not in the copy of the index, but it is in the index or in HEAD; commit refused" >&2
+    exit 1
+else
+    echo "$name: scripts/check.sh is not on this branch (not in the index or HEAD); no static check" >&2
+fi
+
+scan=$top/scripts/scan.sh
+if [ ! -f "$scan" ]; then
+    # Fail closed: the script is gone from the working tree, but the branch has it.
+    if git cat-file -e :scripts/scan.sh 2>/dev/null || git cat-file -e HEAD:scripts/scan.sh 2>/dev/null; then
+        echo "$name: scripts/scan.sh is not in the working tree, but it is in the index or in HEAD; commit refused" >&2
+        exit 1
+    fi
+    echo "$name: scripts/scan.sh is not on this branch (not in the working tree, the index or HEAD); no scan" >&2
+    exit 0
+fi
+
+# A change of the rules runs the negative control first.
+if git diff --cached --name-only |
+    grep -qx -e '\.gitleaks\.toml' -e 'scripts/host-values\.deny' -e 'scripts/host-values\.allow' \
+        -e 'scripts/host-values\.regex' \
+        -e 'scripts/host-values\.allow-lines' \
+        -e 'scripts/scan\.sh'; then
+    sh "$scan" selftest </dev/null || {
+        echo "$name: the negative control failed; commit refused" >&2
+        exit 1
+    }
+fi
+
+sh "$scan" staged </dev/null || {
+    echo "$name: commit refused (docs/secret-handling.md)" >&2
+    exit 1
+}
