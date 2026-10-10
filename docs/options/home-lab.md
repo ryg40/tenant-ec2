@@ -39,7 +39,7 @@ Keep both empty when search is off. Do not use a dead address as the off switch.
 
 Warning: Search content can contain instructions that try to misuse the agent's memory and knowledge tools.
 
-Not verified: search disabled behavior in the pending basic-agent release, or a request to a live search backend.
+Not verified: search disabled behavior of the pinned basic-agent release on the host, or a request to a live search backend.
 
 ## Credential stores
 
@@ -91,6 +91,15 @@ Not verified: a private snapshot clone through this helper on a host.
 ## Private kit source
 
 A source override changes the clone location, not the reviewed tag or commit in `kits.lock`.
+The locked pi-durable source is private. Its clone credential is required even without a source override.
+
+1. Create a new read-only token scoped to that repository, with an expiry date.
+2. Set `EC2_KIT_TOKEN_PI_DURABLE` in the private environment file before writing the host secret.
+3. Write the Secrets Manager secret through the [install procedure](../install.md#5-write-the-secret) after approval.
+
+The bootstrap reads the token from that secret into the host environment file and supplies it to Git through `GIT_ASKPASS`.
+Leave `EC2_KIT_SOURCE_PI_DURABLE` empty to use the locked source URL.
+These Part 2 names need no `--allow-empty` exception; the secret command refuses that exception.
 
 | Requirement | Rule |
 | --- | --- |

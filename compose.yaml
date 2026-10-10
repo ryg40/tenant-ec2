@@ -380,8 +380,8 @@ services:
   # The pi-durable agent. Model: the gateway route of EC2_PI_DURABLE_MODEL at reasoning
   # effort `xhigh` only. The route is `bedrock/luna` in the core. Its SQLite storage is
   # on the data volume; the image runs as uid 1000.
-  # The image has the release name of kits.lock. The source pin is still empty.
-  # The bootstrap starts no agent until the promotion adds that pin.
+  # The image and source pin are in kits.lock. The source is private.
+  # The bootstrap clones it with EC2_KIT_TOKEN_PI_DURABLE and includes the agent.
   #
   # Memory: the agent calls OpenViking with a user key of its own, in OPENVIKING_API_KEY.
   # It never holds the root key: OpenViking 0.2.0 refuses a root key on each data path

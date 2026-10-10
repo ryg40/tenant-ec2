@@ -294,5 +294,6 @@ The core exposes only `ok` by default.
 A skip line is not proof that a route works, and not proof that it failed.
 Do not expose another name or weaken the gate for a check.
 Both the service list and the deployed verifier skip an agent with no source pin in the host lock.
-The first snapshot starts no agent service. A later snapshot adds the pinned agent.
+The current lock pins the agent, so the bootstrap includes it and both checks require its running service.
+The skip behavior remains for older snapshots with no agent pin.
 Not verified: this skip path in an SSM command on Amazon Linux 2023. Offline stubs prove the command logic only.

@@ -1,8 +1,8 @@
 # The kit lock of tenant-ec2. YAML. See docs/reference/host-boot.md.
 # A server kit is pinned by source tag, source commit and the digest of its final image.
-# `source_repo` is a public repository that holds the tag at the commit. An empty value means
-# that no public repository holds the pin. Then the host names its source in `.env`
-# (EC2_KIT_SOURCE_<KIT>). The pin stays the same for each source.
+# `source_repo` is the HTTPS repository that holds the tag at the commit, public or private.
+# A private source needs EC2_KIT_TOKEN_<KIT> in the host secret. An empty source means
+# the host must set EC2_KIT_SOURCE_<KIT>. An override must provide the same pin.
 # An `image_digest` of a local build is its image id. On the host, the
 # bootstrap (`scripts/host-bootstrap.sh`) writes the id of each build into this file.
 # The pins name reviewed kit releases. A different source must provide the same pin.
@@ -45,15 +45,14 @@ server_kits:
     service: open-knowledge
   pi-durable:
     # The basic agent service of the pi-durable kit.
-    # The kit has no portable tag yet and no public repository. Set
-    # EC2_KIT_SOURCE_PI_DURABLE when its reviewed release is available.
-    source_repo: ""
-    source_tag: "" # release pending
-    source_commit: ""
+    # The source is private. Set EC2_KIT_TOKEN_PI_DURABLE for its read-only clone.
+    source_repo: https://github.com/ryg40/tenant-pi-durable.git
+    source_tag: portable-v0.1.0
+    source_commit: "68d6fcb3906d170710cb7861591032af2b52cacc"
     image: pi-durable:1.0.0-p0.1.0
     image_digest: ""
     build: sh scripts/build.sh -t pi-durable:1.0.0-p0.1.0
-    # This standalone check waits for the source pin. It runs with a model stand-in.
+    # This standalone check runs with a model stand-in.
     verify: sh scripts/verify.sh pi-durable:1.0.0-p0.1.0
     service: pi-durable
 

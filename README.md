@@ -49,9 +49,10 @@ Follow the [install guide](docs/install.md) for the commands and checks.
 Warning: a deploy creates billed AWS resources. No command on this page authorizes a deploy.
 
 Not verified: a complete live install of the core. The reference pages keep the specific limits of the checks.
-The first snapshot has no pin of the pi-durable kit. The host then starts no agent service, and `verify` prints a skip line for it.
-A later snapshot adds the agent. Do not deploy when another kit has no pin in the lock.
-Not verified: the first portable tag and commit of the pi-durable kit.
+The lock pins pi-durable at `portable-v0.1.0`; the bootstrap includes the agent, and `verify` requires its running service.
+Its source is private. Set `EC2_KIT_TOKEN_PI_DURABLE` as the [private kit source procedure](docs/options/home-lab.md#private-kit-source) describes.
+Do not deploy when a required kit has no pin in the lock.
+Not verified: a private agent-kit clone or a complete install with the agent on the host.
 
 ## Pages
 

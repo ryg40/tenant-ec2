@@ -71,6 +71,7 @@ class StackFixture(unittest.TestCase):
                                      "litellm/config.yaml", "litellm/config.copilot.yaml"):
             (self.repo / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / name, self.repo / name)
+        self.unpin_agent()
         self.host_env(self.file_set, self.edge_names)
         self.calls = []
         self.down = None
@@ -142,13 +143,31 @@ class StackFixture(unittest.TestCase):
         """Each service that a Docker call of the run names."""
         return set(self.required()) | {self.exec_service(args) for args, _ in self.execs()}
 
+    def unpin_agent(self):
+        # Keep legacy skip cases independent of the release pin in the source tree.
+        self.mutate("kits.lock", lambda d: d["server_kits"]["pi-durable"].update(
+            source_tag="", source_commit=""))
+
     def pin_agent(self):
         self.mutate("kits.lock", lambda d: d["server_kits"]["pi-durable"].update(
             source_tag="fixture-tag", source_commit="a" * 40))
 
 
 class StackTests(StackFixture):
-    def test_healthy_pristine_stack_and_explicit_skips(self):
+    def test_healthy_current_lock_requires_the_pinned_agent(self):
+        shutil.copyfile(ROOT / "kits.lock", self.repo / "kits.lock")
+        rc, out, err = self.execute()
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(set(self.required()), set(services_of(self.file_set)))
+        self.assertNotIn("absent source pin", out)
+        self.calls.clear()
+        self.down = "pi-durable"
+        rc, _, err = self.execute()
+        self.assertEqual(rc, 1)
+        self.assertIn("pi-durable: expected one deployed container", err)
+        self.assertFalse(self.execs())
+
+    def test_healthy_unpinned_stack_and_explicit_skips(self):
         rc, out, err = self.execute()
         self.assertEqual(rc, 0, err)
         self.assertIn("verify-deployed: pass (health/authentication only; explicit skips remain)", out)
@@ -472,7 +491,7 @@ class FileSetTests(StackFixture):
     def test_public_names_of_the_host_get_a_path_check_from_the_edge(self):
         for options, edge in (("", "caddy"), ("pangolin", "gerbil")):
             with self.subTest(options=options):
-                shutil.copyfile(ROOT / "kits.lock", self.repo / "kits.lock")
+                self.unpin_agent()
                 self.calls.clear()
                 self.host_env(FILE_SETS[options], "ok,agent,llm,ov")
                 rc, out, err = self.execute("--file-set", FILE_SETS[options], "--edge-names", "ok,llm,ov,agent")
@@ -552,7 +571,7 @@ class FileSetTests(StackFixture):
 @unittest.skipUnless(shutil.which("curl"), "curl is needed to execute the real Pangolin HTTP probe")
 class PangolinCurlTests(unittest.TestCase):
     def test_real_curl_status_redirect_body_limit_and_suppression(self):
-        fixture = StackTests("test_healthy_pristine_stack_and_explicit_skips")
+        fixture = StackTests("test_healthy_unpinned_stack_and_explicit_skips")
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         self.assertEqual(fixture.execute()[0], 0)

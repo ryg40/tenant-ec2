@@ -88,7 +88,8 @@ Pangolin, Gerbil and Traefik replace Caddy, add tunnel ports and a blueprint, an
 A home Newt site opens an outbound tunnel to Gerbil; site traffic uses UDP 51820, while clients use UDP 21820.
 Copilot adds its service and model routes without removing Bedrock; its new login keeps token files on the EBS data volume.
 `EC2_DNS_PROVIDER` selects `manual`, `porkbun`, `route53` or `cloudflare`; provider credentials stay off the host except Pangolin's Porkbun pair.
-Home web search, private kit sources, Bitwarden and Vault remain optional and are not prerequisites of the core.
+Home web search, kit source overrides, Bitwarden and Vault remain optional.
+The locked agent source is private and needs its own read-only clone credential.
 
 ## Sources and limits
 
@@ -106,7 +107,7 @@ The template and scripts provide the existing infrastructure and boot facts.
 
 - Not verified: a live AWS deploy, storage mount, Bedrock call, certificate issue, DNS update or SSM verify run.
 - Not verified: a real Entra login and group check after deployment.
-- Not verified: basic-agent startup and its calls to memory and knowledge. The agent's portable pin is incomplete in `kits.lock`.
+- Not verified: basic-agent startup and its calls to memory and knowledge. `kits.lock` pins its source at `portable-v0.1.0`.
 - Not verified: the live IAM limits, optional bucket, snapshot retention, journal delivery or billing alarm. Apply the reviewed provisioner policy before enabling operations or the bucket.
 
 These are source diagrams, not a statement that a service works.

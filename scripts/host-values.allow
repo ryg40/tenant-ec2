@@ -8,7 +8,7 @@
 # of scripts/host-values.regex (docs/secret-handling.md).
 #
 # Add a line only after a decision of the maintainer. The URLs below are
-# public repositories of the kits that kits.lock names.
+# repositories of the kits that kits.lock names; they can be public or private.
 #
 # Format: one exact https URL for each line, case-sensitive. A line that
 # starts with "#" is a comment. Quotes, backslashes and blanks are not allowed.
@@ -16,3 +16,4 @@ https://github.com/ryg40/litellm-gateway.git
 https://github.com/ryg40/openviking.git
 https://github.com/ryg40/open-knowledge.git
 https://github.com/ryg40/tenant-pi.git
+https://github.com/ryg40/tenant-pi-durable.git

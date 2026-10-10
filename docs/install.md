@@ -66,11 +66,12 @@ scripts/install-hooks.sh --check
 sh scripts/scan.sh selftest
 ```
 
-7. Check every required kit pin in `kits.lock`. Stop if a required non-agent kit lacks its source tag or commit.
+7. Check every required kit pin in `kits.lock`. Stop if a required kit lacks its source tag or commit.
 
-The first snapshot has no agent pin. The bootstrap starts no agent service, and `verify` prints a skip for it.
-A later snapshot adds the pinned agent.
-Not verified: the first portable pi-durable pin and a complete install with the agent.
+The lock pins the agent at `portable-v0.1.0`. The bootstrap includes it, and `verify` requires its running service.
+The agent source is private. Set `EC2_KIT_TOKEN_PI_DURABLE` before writing the host secret.
+Follow the [private kit source procedure](options/home-lab.md#private-kit-source); a source override is unnecessary for the locked repository.
+Not verified: a private agent-kit clone or a complete install with the agent on the host.
 A snapshot clone has no development work tracker or local host-value deny list.
 A clean scan without that list does not prove the absence of your own host values.
 

@@ -182,9 +182,11 @@ Warning: a service log can hold a secret, for example the first setup token of P
 
 An incomplete tag or commit in `kits.lock` prevents that kit from cloning, building or starting.
 Other selected services can still start; this is not a complete core install.
-The basic pi-durable kit needs its first portable pin before the complete core can start.
+The lock pins the basic pi-durable kit at `portable-v0.1.0`, so the bootstrap includes its service.
 
-A private kit source uses `EC2_KIT_SOURCE_<KIT>` and a read-only `EC2_KIT_TOKEN_<KIT>`.
+A private kit source needs a read-only `EC2_KIT_TOKEN_<KIT>` in the host secret.
+The locked agent source needs `EC2_KIT_TOKEN_PI_DURABLE` before first boot.
+Set `EC2_KIT_SOURCE_<KIT>` only to override the source URL; the tag and commit stay fixed.
 `GIT_ASKPASS` supplies the credential without placing it in a URL, argument or log line.
 The build runs with an empty environment, so shell variables cannot change a kit pin.
 Never build from a working checkout of a kit.
