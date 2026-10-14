@@ -1,6 +1,6 @@
 # The DNS records of the host
 
-[Options](README.md) | [Core install](../install.md) | [Deploy script](../reference/deploy-script.md)
+[Options](README.md) | [Core install](../install.md) | [Deploy script](../reference/deploy-script.md) | [DNS migration](../reference/dns-migration.md)
 
 The host needs one DNS record for each public name. The setting `EC2_DNS_PROVIDER` says who makes the records. The default is `manual`: you make each record by hand. Three other providers make the records through an API.
 
@@ -177,6 +177,8 @@ A name with more than one A record stops the script. Delete each record but one 
 ## The option pangolin
 
 The Pangolin edge makes one wildcard certificate with the DNS-01 challenge through Porkbun. So the option `pangolin` needs `EC2_DNS_PROVIDER=porkbun`, and each script stops with another provider. The page [Pangolin edge](pangolin.md) gives the steps of the option.
+
+Porkbun must answer for the domain before the certificate can exist. When another provider answers for it, move the complete zone first: the page [DNS migration](../reference/dns-migration.md) gives the procedure.
 
 With this option, the Porkbun pair goes into the Secrets Manager secret: the edge needs it on the host. `scripts/aws-host.sh secret` then needs a value for the two names.
 

@@ -69,6 +69,25 @@ The script writes into `.env` only. It refuses the sample file `.env.example`. T
 
 Not verified: a live app registration or a live group login. No call to Azure ran.
 
+## Generated-key storage
+
+`<Project>/env` holds installer configuration. `<Project>/generated` holds only the three bootstrap-generated service keys in the table above.
+The host can read both secrets. It can write versions of the generated secret only; it cannot create secrets.
+The role and its boundary must both allow `PutSecretValue` on that secret before write-back works.
+
+The bootstrap saves the keys after creation. A failed put warns, keeps the mode 0600 host file and continues.
+A repeat prefers the generated secret, then the environment secret, then the existing host file.
+A missing or empty generated secret permits creation of the missing service keys.
+`scripts/aws-host.sh secret` fills only empty generated names from the generated secret before its normal environment-secret write.
+An explicit nonempty private-file value stays unchanged. For rotation, reconcile both secrets and the service database under a separate approval.
+
+`scripts/aws-host.sh generated-status` prints the three names with `present` or `absent`, never a value.
+`verify` requires all three names. Presence proves neither credential validity nor agreement with a service database.
+Use a private Secrets Manager read for approved external copies. Never print a key into Systems Manager output or a transcript.
+The kit does not write Bitwarden or Vault during bootstrap.
+
+Not verified: the live template and boundary apply, or the first write-back on a host.
+
 ## Core settings
 
 These values are not credentials. They still identify a deployment and must stay out of tracked examples.

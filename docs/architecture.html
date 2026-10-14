@@ -1,0 +1,4281 @@
+<!DOCTYPE html>
+<!-- Built by scripts/build-architecture-html.py from docs/diagrams/architecture-graph.json. Do not edit by hand. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-WwA62o5sYm0IWHOQrv4dZtpU6lwTc9pk2rdZlFMwL7M='; style-src 'sha256-KBj0L1Y24irHpvdY4DJ3khFnqJIBm0bmBwcykkJwxUI='; img-src 'none'; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>tenant-ec2 architecture</title>
+<style>
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117; color: #e6edf3;
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  display: grid; height: 100vh; overflow: hidden;
+  grid-template-columns: 300px minmax(0, 1fr) 360px;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas: "top top top" "side stage detail" "side tour detail";
+}
+button, input, select { font: inherit; color: #e6edf3; }
+button {
+  background: #1f2a36; border: 1px solid #2a3644; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: #a3b3c2; }
+button:disabled { opacity: .45; cursor: default; }
+input[type=search], select {
+  background: #0f151c; border: 1px solid #2a3644; border-radius: 6px; padding: 6px 8px; width: 100%;
+}
+:focus-visible { outline: 2px solid #6cb0ff; outline-offset: 2px; }
+.top {
+  grid-area: top; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 16px; background: #131a22; border-bottom: 1px solid #2a3644;
+}
+.top h1 { font-size: 17px; margin: 0; }
+.top p { margin: 2px 0 0; color: #a3b3c2; font-size: 12.5px; }
+.top .controls { display: flex; gap: 6px; align-items: center; color: #a3b3c2; font-size: 12.5px; }
+.top .controls .keys { margin-right: 10px; }
+.side {
+  grid-area: side; overflow-y: auto; background: #131a22; border-right: 1px solid #2a3644; padding: 12px 14px 28px;
+}
+.side section { margin-bottom: 18px; }
+.side h2, .detail h3 {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .08em; color: #a3b3c2; margin: 0 0 8px; font-weight: 650;
+}
+.side label.field { display: block; font-size: 12.5px; color: #a3b3c2; margin: 8px 0 4px; }
+.results { list-style: none; margin: 8px 0 0; padding: 0; max-height: 230px; overflow-y: auto; }
+.results li { margin: 2px 0; }
+.result {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: transparent;
+  border: 1px solid transparent; padding: 4px 6px;
+}
+.result:hover { background: #18212b; border-color: #2a3644; }
+.check { display: flex; align-items: center; gap: 8px; padding: 3px 0; cursor: pointer; font-size: 13.5px; }
+.check input { margin: 0; accent-color: #6cb0ff; }
+.num { color: #a3b3c2; font-variant-numeric: tabular-nums; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid; flex: none; }
+.legend-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin: 6px 0; }
+.border-sample { flex: none; width: 30px; height: 16px; border: 2px solid #a3b3c2; border-radius: 4px; }
+.border-sample.dashed { border-style: dashed; }
+.line-sample { flex: none; overflow: visible; }
+.line-sample line { stroke-width: 2.4; }
+.line-sample line.option { stroke-dasharray: 5 4; stroke: #a3b3c2; }
+.row { display: flex; gap: 8px; margin-top: 10px; }
+.muted { color: #a3b3c2; }
+.small { font-size: 12.5px; }
+.note { font-size: 13px; color: #a3b3c2; margin: 8px 0 4px; }
+.path-steps { margin: 6px 0 0; padding-left: 20px; font-size: 13px; }
+.path-steps li { margin: 6px 0; }
+.stage { grid-area: stage; position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+#canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
+#canvas.panning { cursor: grabbing; }
+#canvas:focus { outline: none; }
+.backdrop { fill: #0d1117; }
+.dot { fill: #1c2633; }
+.frame rect { fill: #8cb4dc; fill-opacity: .035; stroke: #2a3644; stroke-width: 1.2; }
+.frame-label { fill: #a3b3c2; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.focus .frame rect { opacity: .55; }
+.node { cursor: pointer; }
+.node .card { stroke-width: 1.8; transition: fill-opacity .18s, stroke-opacity .18s; }
+.node.option .card { stroke-dasharray: 7 4; }
+.node:hover .card, .node:focus-visible .card { stroke-width: 3; }
+.node:focus { outline: none; }
+.nlabel { fill: #ffffff; font-size: 13.5px; font-weight: 650; pointer-events: none; transition: fill .18s; }
+.ncaption { fill: #eef2f6; font-size: 11.5px; pointer-events: none; transition: fill .18s; }
+.node.match .card { stroke: #ffd166; stroke-width: 3; }
+.node.onpath .card { stroke: #b6f05a; stroke-width: 3.2; }
+.node.sel .card { stroke: #ffffff; stroke-width: 3.4; }
+.focus .node:not(.on) .card { fill-opacity: 0.2; stroke-opacity: 0.35; }
+.focus .node:not(.on) .nlabel, .focus .node:not(.on) .ncaption { fill: #a3b3c2; }
+.hidden { display: none; }
+.edge { fill: none; stroke-width: 1.5; opacity: .55; transition: opacity .18s; }
+.edge.option { stroke-dasharray: 6 4; }
+.edge.on { opacity: 1; stroke-width: 2.6; }
+.focus .edge:not(.on) { opacity: .06; }
+.edge.onpath { stroke: #b6f05a; marker-end: url(#m-path); stroke-width: 3.2; }
+.elabel { display: none; pointer-events: none; }
+.elabel.on { display: inline; }
+.elabel text { fill: #e6edf3; font-size: 11.5px; text-anchor: middle; }
+.elabel rect { fill: #0d1117; fill-opacity: .9; stroke: #2a3644; stroke-width: 1; }
+.tip {
+  position: absolute; pointer-events: none; background: #0b0f14; border: 1px solid #2a3644; border-radius: 6px;
+  padding: 6px 9px; font-size: 12.5px; max-width: 300px; box-shadow: 0 6px 18px rgba(0, 0, 0, .45); z-index: 5;
+}
+.tip strong { display: block; }
+.tip span { color: #a3b3c2; }
+.tour {
+  grid-area: tour; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; background: #18212b; border-top: 1px solid #2a3644; min-height: 66px;
+}
+.tour select { width: auto; min-width: 190px; }
+.tour .count { color: #a3b3c2; font-size: 12.5px; min-width: 82px; text-align: center; }
+.tour p { margin: 0; flex: 1 1 320px; font-size: 14px; }
+.detail {
+  grid-area: detail; overflow-y: auto; background: #131a22; border-left: 1px solid #2a3644; padding: 14px 16px 28px;
+}
+.detail h2 { font-size: 19px; margin: 2px 0 8px; overflow-wrap: anywhere; }
+.detail h3 { margin-top: 18px; }
+.eyebrow { margin: 0; color: #a3b3c2; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 8px;
+  border: 1px solid #2a3644; border-radius: 999px; background: #18212b;
+}
+.chip.status-option { border-style: dashed; border-color: #a3b3c2; }
+.chip.status-core { border-color: #a3b3c2; }
+.summary { margin: 4px 0 10px; }
+.cards { margin: 0; }
+.cards dt { color: #a3b3c2; font-size: 12.5px; margin-top: 8px; }
+.cards dd { margin: 2px 0 0; }
+.cards dd span { display: block; }
+.plain, .notes, .edges { margin: 0; padding-left: 18px; }
+.plain li, .notes li { margin: 3px 0; }
+.edges { list-style: none; padding: 0; }
+.edges li { margin: 6px 0; display: grid; grid-template-columns: 12px auto; column-gap: 8px; align-items: center; }
+.edges .edge-meta { grid-column: 2; color: #a3b3c2; font-size: 12.5px; }
+.kind-dot { width: 10px; height: 10px; border-radius: 50%; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+.link {
+  background: none; border: none; padding: 0; color: #6cb0ff; text-align: left; text-decoration: underline;
+  text-underline-offset: 2px; justify-self: start;
+}
+details.diagram { border-top: 1px solid #2a3644; padding: 8px 0; }
+details.diagram summary { cursor: pointer; font-weight: 600; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+#side-toggle { display: none; }
+@media (max-width: 1100px) {
+  body { grid-template-columns: 260px minmax(0, 1fr); grid-template-areas: "top top" "side stage" "side tour" "detail detail";
+    grid-template-rows: auto minmax(0, 1fr) auto 38vh; }
+  .detail { border-left: none; border-top: 1px solid #2a3644; }
+}
+@media (max-width: 900px) {
+  body { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "stage" "tour" "detail"; }
+  .top .controls .keys { display: none; }
+  #side-toggle { display: inline-block; }
+  .tour select { min-width: 0; flex: 1 1 100px; }
+  .tour .count { min-width: 0; }
+  .side {
+    grid-area: 2 / 1 / -1 / 2; z-index: 3; display: none; width: min(320px, 88vw);
+    box-shadow: 8px 0 22px rgba(0, 0, 0, .5);
+  }
+  .drawer-open .side { display: block; }
+}
+.g-aws .card { fill: #285b88; stroke: #94adc4; }
+.swatch.g-aws { background: #285b88; border-color: #94adc4; }
+.g-service .card { fill: #176b5b; stroke: #8bb5ad; }
+.swatch.g-service { background: #176b5b; border-color: #8bb5ad; }
+.g-data .card { fill: #94601d; stroke: #cab08e; }
+.swatch.g-data { background: #94601d; border-color: #cab08e; }
+.g-identity .card { fill: #9c3d45; stroke: #ce9ea2; }
+.swatch.g-identity { background: #9c3d45; border-color: #ce9ea2; }
+.g-external .card { fill: #52616b; stroke: #a8b0b5; }
+.swatch.g-external { background: #52616b; border-color: #a8b0b5; }
+.k-request { stroke: #79b8ff; marker-end: url(#m-request); }
+.kind-dot.k-request { background: #79b8ff; }
+.k-dependency { stroke: #a8b3bd; marker-end: url(#m-dependency); }
+.kind-dot.k-dependency { background: #a8b3bd; }
+.k-login-step { stroke: #f0919b; marker-end: url(#m-login-step); }
+.kind-dot.k-login-step { background: #f0919b; }
+.k-install-step { stroke: #e3b55f; marker-end: url(#m-install-step); }
+.kind-dot.k-install-step { background: #e3b55f; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>tenant-ec2 architecture</h1>
+    <p>The portable core and its options, not a deployed host.</p>
+  </div>
+  <div class="controls">
+    <button type="button" id="side-toggle" aria-controls="side" aria-expanded="false">Menu</button>
+    <span class="keys">Arrow keys: tour. Escape: clear.</span>
+    <button type="button" id="zoom-out" aria-label="Zoom out">-</button>
+    <button type="button" id="zoom-fit">Fit</button>
+    <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+  </div>
+</header>
+<aside class="side" id="side" aria-label="Search, filters and path finder">
+  <section>
+    <h2><label for="search">Search</label></h2>
+    <input id="search" type="search" placeholder="A label or a summary" autocomplete="off">
+    <ul id="results" class="results" aria-label="Search results"></ul>
+  </section>
+  <section>
+    <h2>Diagrams</h2>
+    <div id="filter-diagrams"></div>
+  </section>
+  <section>
+    <h2>Colour key</h2>
+    <div id="filter-groups"></div>
+    <div class="row"><button type="button" id="filter-reset">Show all</button></div>
+  </section>
+  <section>
+    <h2>Legend</h2>
+    <div id="legend"></div>
+  </section>
+  <section>
+    <h2>Path finder</h2>
+    <label class="field" for="path-from">Start</label>
+    <select id="path-from"></select>
+    <label class="field" for="path-to">End</label>
+    <select id="path-to"></select>
+    <div class="row">
+      <button type="button" id="path-find">Find the path</button>
+      <button type="button" id="path-clear">Clear</button>
+    </div>
+    <p id="path-note" class="note" aria-live="polite"></p>
+    <ol id="path-steps" class="path-steps"></ol>
+  </section>
+</aside>
+<main class="stage" id="stage">
+  <svg id="canvas" tabindex="0" role="application" aria-label="Architecture graph">
+    <defs>
+      <marker id="m-request" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z" fill="#79b8ff"/></marker>
+      <marker id="m-dependency" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z" fill="#a8b3bd"/></marker>
+      <marker id="m-login-step" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f0919b"/></marker>
+      <marker id="m-install-step" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z" fill="#e3b55f"/></marker>
+      <marker id="m-path" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z" fill="#b6f05a"/></marker>
+      <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle class="dot" cx="12" cy="12" r="1.1"/></pattern>
+    </defs>
+    <g id="viewport"></g>
+  </svg>
+  <div id="tip" class="tip" hidden></div>
+</main>
+<div class="tour" role="region" aria-label="Guided tour">
+  <label class="sr" for="tour-select">Tour</label>
+  <select id="tour-select"></select>
+  <button type="button" id="tour-prev">Previous</button>
+  <span id="tour-count" class="count"></span>
+  <button type="button" id="tour-next">Next</button>
+  <p id="tour-text" aria-live="polite"></p>
+</div>
+<aside class="detail" id="detail" aria-label="Details" aria-live="polite"></aside>
+<script type="application/json" id="graph-data">
+{
+ "graph": {
+  "meta": {
+   "title": "tenant-ec2 architecture",
+   "subtitle": "The portable core and its options, not a deployed host.",
+   "snapshot": "Merged source files. No live deployment.",
+   "note": "Arrows show requests or dependencies, not live checks. Frames group related parts.",
+   "sources": [
+    "docs/diagrams/01-aws-core.json",
+    "docs/diagrams/02-services.json",
+    "docs/diagrams/03-entra-login.json",
+    "docs/diagrams/04-install-flow.json",
+    "docs/diagrams/05-options.json",
+    "docs/architecture.md",
+    "scripts/aws-host.cfn.yaml",
+    "compose.yaml",
+    "compose.caddy.yaml",
+    "compose.pangolin.yaml",
+    "compose.copilot.yaml",
+    "docs/options/README.md"
+   ]
+  },
+  "groups": [
+   {
+    "id": "aws",
+    "label": "AWS infrastructure",
+    "colour": "Blue",
+    "color": "#285b88"
+   },
+   {
+    "id": "service",
+    "label": "Service",
+    "colour": "Green",
+    "color": "#176b5b"
+   },
+   {
+    "id": "data",
+    "label": "Stored data",
+    "colour": "Brown",
+    "color": "#94601d"
+   },
+   {
+    "id": "identity",
+    "label": "Identity or credential",
+    "colour": "Red",
+    "color": "#9c3d45"
+   },
+   {
+    "id": "external",
+    "label": "External client or tool",
+    "colour": "Gray",
+    "color": "#52616b"
+   }
+  ],
+  "statuses": [
+   {
+    "id": "core",
+    "label": "Core",
+    "meaning": "The portable core. A solid border marks it.",
+    "border": "solid"
+   },
+   {
+    "id": "option",
+    "label": "Option",
+    "meaning": "Off until the installer selects it. A dashed border marks it.",
+    "border": "dashed"
+   }
+  ],
+  "edgeKinds": [
+   {
+    "id": "request",
+    "label": "Request",
+    "color": "#79b8ff",
+    "meaning": "A call or traffic from one part to another."
+   },
+   {
+    "id": "dependency",
+    "label": "Dependency",
+    "color": "#a8b3bd",
+    "meaning": "One part needs, limits or holds another part."
+   },
+   {
+    "id": "login-step",
+    "label": "Login step",
+    "color": "#f0919b",
+    "meaning": "A numbered step of the browser login."
+   },
+   {
+    "id": "install-step",
+    "label": "Install step",
+    "color": "#e3b55f",
+    "meaning": "A step of the install order, or its result."
+   }
+  ],
+  "diagrams": [
+   {
+    "id": "aws-core",
+    "number": "01",
+    "title": "AWS core",
+    "subtitle": "One instance. Separate block storage, shared files and identity.",
+    "source": "docs/diagrams/01-aws-core.json",
+    "notes": [
+     "IAM: Provisioner creates bounded roles; InstanceRole permits the host to read its secret and invoke Bedrock.",
+     "Docker requires four durable mounts and the metadata guard: the EBS data volume plus the three EFS access points.",
+     "EnableOperations and EnableBucket are separate switches, both off by default. The administrator owns the snapshot role.",
+     "Gateway calls Bedrock through the internet route. EnableBucket adds scoped object access only after the policy update.",
+     "Core opens no tunnel port. EnablePangolin adds UDP 51820 and 21820. EFS and EBS are separate services."
+    ]
+   },
+   {
+    "id": "services",
+    "number": "02",
+    "title": "Core services",
+    "subtitle": "compose.yaml + compose.caddy.yaml / only the edge publishes ports.",
+    "source": "docs/diagrams/02-services.json",
+    "notes": [
+     "Default public name: ok.\u003cdomain\u003e. Caddy targets ok-auth, never open-knowledge.",
+     "Optional names: agent / llm / ov use edge-agent / edge-llm / edge-ov, AdminCidr and each service key.",
+     "Internal: db, llm, memory, knowledge, knowledge-agent and the four edge resource networks.",
+     "knowledge: gate + OpenKnowledge only. knowledge-agent: agent + OpenKnowledge only. OpenKnowledge uses port 80.",
+     "Gate networks: knowledge, gate-egress, edge-ok. edge-ok: 198.18.5.0/29, edge + gate only.",
+     "Internet routes: egress, gate-egress, edge-core. The gate is the only member of gate-egress.",
+     "The agent shares egress with the gateway, also with web search off.",
+     "Rendered core: 7 services / 12 networks. Copilot: 8 / 13. Pangolin: 9 / 12. Both options: 10 / 13.",
+     "The agent uses http://ok.\u003cdomain\u003e/mcp, an internal alias. OpenKnowledge makes no model call."
+    ]
+   },
+   {
+    "id": "entra-login",
+    "number": "03",
+    "title": "Entra login",
+    "subtitle": "Browser login uses Entra ID. Neither edge skips the gate.",
+    "source": "docs/diagrams/03-entra-login.json",
+    "notes": [
+     "Steps 1-8 match docs/entra.md. Step 4 sends the client secret and PKCE verifier; Entra returns the ID token.",
+     "Step 5 checks signature, tenant issuer, client id, nonce and expiry. Step 6 requires the allowed group.",
+     "Step 7 sets the Secure, HttpOnly cookie and redirects to the page. Step 8 checks each later session on knowledge.",
+     "Pangolin replaces Caddy only. Its ok resource has no second Pangolin login."
+    ]
+   },
+   {
+    "id": "install-flow",
+    "number": "04",
+    "title": "Install flow",
+    "subtitle": "The installer prepares inputs. The instance reads its secret and builds pinned kits.",
+    "source": "docs/diagrams/04-install-flow.json",
+    "notes": [
+     "The secret exists before boot. User data checks SnapshotCommit before it runs any script of the clone.",
+     "Docker drop-in: tenant-ec2-storage.conf requires four durable mounts and the metadata guard before Docker starts.",
+     "Verify: compose ps, file-set test, service list, then verify-deployed.py with file set and public names.",
+     "Verify uses internal requests only. It runs no kits.lock verify line and proves no login, public route or model answer.",
+     "The bootstrap writes COMPOSE_FILE into the host environment file. A manual Compose command uses the same overlays.",
+     "The host keeps generated service keys. The installer saves them and updates the secret after boot.",
+     "This picture is an install order, not a deploy approval. No AWS, Entra, DNS or credential-store change runs here."
+    ]
+   },
+   {
+    "id": "options",
+    "number": "05",
+    "title": "Options",
+    "subtitle": "An option stays off until the installer selects it. The core needs no home lab.",
+    "source": "docs/diagrams/05-options.json",
+    "notes": [
+     "EC2_OPTIONS: empty / copilot / pangolin / pangolin,copilot. Unknown option names stop the scripts.",
+     "Each selected public name gets an A record to ElasticIp. Pangolin adds pangolin.\u003cdomain\u003e.",
+     "Pangolin keeps ok-auth as the ok target. Its ok resource uses the Entra gate, not a second Pangolin login.",
+     "DNS provider credentials stay off the core host. Only Pangolin needs the Porkbun pair there for DNS-01.",
+     "A Newt site uses UDP 51820. UDP 21820 serves clients; both ports open only with Pangolin."
+    ]
+   }
+  ],
+  "frames": [
+   {
+    "id": "aws-core/install",
+    "diagram": "aws-core",
+    "label": "Installer / IAM",
+    "nodes": [
+     "provisioner",
+     "boundary",
+     "instance-role",
+     "key-pair"
+    ]
+   },
+   {
+    "id": "aws-core/vpc",
+    "diagram": "aws-core",
+    "label": "VPC",
+    "nodes": [
+     "elastic-ip",
+     "instance-sg",
+     "instance",
+     "data-volume",
+     "internet-route",
+     "efs-sg",
+     "mount-target"
+    ]
+   },
+   {
+    "id": "aws-core/subnet",
+    "diagram": "aws-core",
+    "label": "Subnet",
+    "parent": "aws-core/vpc",
+    "nodes": [
+     "instance",
+     "mount-target"
+    ]
+   },
+   {
+    "id": "aws-core/services",
+    "diagram": "aws-core",
+    "label": "AWS services",
+    "nodes": [
+     "stack-secret",
+     "bedrock",
+     "efs",
+     "access-points",
+     "bucket"
+    ]
+   },
+   {
+    "id": "aws-core/operations",
+    "diagram": "aws-core",
+    "label": "EnableOperations=true / optional",
+    "nodes": [
+     "snapshots",
+     "host-logs",
+     "billing-alarm"
+    ]
+   },
+   {
+    "id": "services/compose",
+    "diagram": "services",
+    "label": "EC2 / Docker Compose",
+    "nodes": [
+     "caddy",
+     "ok-auth",
+     "open-knowledge",
+     "pi-durable",
+     "openviking",
+     "litellm",
+     "litellm-db"
+    ]
+   },
+   {
+    "id": "services/external",
+    "diagram": "services",
+    "label": "External",
+    "nodes": [
+     "entra",
+     "bedrock"
+    ]
+   },
+   {
+    "id": "entra-login/path",
+    "diagram": "entra-login",
+    "label": "Browser request / one public name",
+    "nodes": [
+     "browser",
+     "caddy",
+     "ok-auth",
+     "open-knowledge"
+    ]
+   },
+   {
+    "id": "entra-login/identity",
+    "diagram": "entra-login",
+    "label": "Identity provider",
+    "nodes": [
+     "entra"
+    ]
+   },
+   {
+    "id": "install-flow/installer",
+    "diagram": "install-flow",
+    "label": "Installer machine / commands",
+    "nodes": [
+     "step-provisioner",
+     "step-env",
+     "step-secret",
+     "step-deploy",
+     "step-dns",
+     "step-verify"
+    ]
+   },
+   {
+    "id": "install-flow/host",
+    "diagram": "install-flow",
+    "label": "EC2 / first boot",
+    "nodes": [
+     "step-user-data",
+     "step-bootstrap",
+     "step-kits",
+     "step-start"
+    ]
+   },
+   {
+    "id": "options/core",
+    "diagram": "options",
+    "label": "Portable core",
+    "nodes": [
+     "core-services",
+     "caddy"
+    ]
+   },
+   {
+    "id": "options/pangolin",
+    "diagram": "options",
+    "label": "EC2_OPTIONS: pangolin",
+    "nodes": [
+     "pangolin",
+     "newt-site",
+     "porkbun-dns01"
+    ]
+   },
+   {
+    "id": "options/copilot",
+    "diagram": "options",
+    "label": "EC2_OPTIONS: copilot",
+    "nodes": [
+     "copilot",
+     "copilot-routes",
+     "copilot-tokens"
+    ]
+   },
+   {
+    "id": "options/dns",
+    "diagram": "options",
+    "label": "EC2_DNS_PROVIDER",
+    "nodes": [
+     "dns-providers",
+     "dns-records",
+     "dns-credentials"
+    ]
+   },
+   {
+    "id": "options/home",
+    "diagram": "options",
+    "label": "Optional home lab tools",
+    "nodes": [
+     "home-tools",
+     "credential-stores"
+    ]
+   }
+  ],
+  "layout": {
+   "rows": [
+    [
+     "install-flow/installer"
+    ],
+    [
+     "install-flow/host"
+    ],
+    [
+     "aws-core/install",
+     "aws-core/vpc"
+    ],
+    [
+     "aws-core/services",
+     "aws-core/operations"
+    ],
+    [
+     "entra-login/path",
+     "services/compose",
+     "services/external"
+    ],
+    [
+     "options/core",
+     "options/pangolin",
+     "options/copilot"
+    ],
+    [
+     "options/dns",
+     "options/home"
+    ]
+   ]
+  },
+  "nodes": [
+   {
+    "id": "provisioner",
+    "label": "Provisioner",
+    "caption": "Scoped IAM user",
+    "group": "identity",
+    "status": "core",
+    "frame": "aws-core/install",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Provisioner",
+      "Scoped IAM user",
+      "Deploys the host stack"
+     ]
+    },
+    "summary": "The provisioner is a scoped IAM user. It deploys the host stack and creates only bounded roles. Its key stays off the host.",
+    "sources": [
+     "scripts/aws-provisioner.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "boundary",
+    "label": "Boundary",
+    "caption": "Limits each host role",
+    "group": "identity",
+    "status": "core",
+    "frame": "aws-core/install",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Boundary",
+      "Limits each host role",
+      "Grants no right by itself"
+     ]
+    },
+    "summary": "The permissions boundary limits each host role. It grants no right by itself. The provisioner gives it to each host role.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "instance-role",
+    "label": "InstanceRole",
+    "caption": "InstanceProfile attaches it",
+    "group": "identity",
+    "status": "core",
+    "frame": "aws-core/install",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "InstanceRole",
+      "InstanceProfile attaches it",
+      "No provisioner key on EC2"
+     ]
+    },
+    "summary": "InstanceProfile attaches the role to the instance. The role lets the host read its secret and invoke Bedrock. No provisioner key goes to EC2.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "key-pair",
+    "label": "KeyPair",
+    "caption": "SshPublicKey is imported",
+    "group": "identity",
+    "status": "core",
+    "frame": "aws-core/install",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "KeyPair",
+      "SshPublicKey is imported",
+      "Private key stays off EC2"
+     ]
+    },
+    "summary": "The stack imports SshPublicKey as the key pair of the instance. The private key stays off EC2. SSH is open from AdminCidr only.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "elastic-ip",
+    "label": "ElasticIp",
+    "caption": "Stable public address",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "ElasticIp",
+      "Stable public address",
+      "DNS A records point here"
+     ]
+    },
+    "summary": "The Elastic IP is the stable public address of the host. The A records of the public names point here. The deploy makes it.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "instance-sg",
+    "label": "InstanceSecurityGroup",
+    "caption": "Public: TCP 80, 443",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "InstanceSecurityGroup",
+      "Public: TCP 80, 443",
+      "AdminCidr only: TCP 22"
+     ]
+    },
+    "summary": "The host security group accepts public TCP ports 80 and 443. It accepts SSH on TCP port 22 from AdminCidr only. EnablePangolin adds UDP ports 51820 and 21820.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "instance",
+    "label": "Instance",
+    "caption": "Amazon Linux 2023 x86_64",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Instance",
+      "Amazon Linux 2023 x86_64",
+      "t3a.large / Docker Compose"
+     ]
+    },
+    "summary": "The instance runs Amazon Linux 2023 x86_64. The default instance type is t3a.large. Docker Compose runs the services. One public subnet holds it.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "data-volume",
+    "label": "DataVolume",
+    "caption": "Encrypted gp3 / retained",
+    "group": "data",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "DataVolume",
+      "Encrypted gp3 / retained",
+      "Postgres and agent state"
+     ]
+    },
+    "summary": "The encrypted gp3 data volume holds the local databases and the agent state. The stack retains it. Docker starts only when it is mounted.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "internet-route",
+    "label": "InternetGateway",
+    "caption": "RouteTable / DefaultRoute",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "InternetGateway",
+      "RouteTable / DefaultRoute",
+      "Internet route of Subnet"
+     ]
+    },
+    "summary": "The internet gateway, the route table and the default route give the subnet its internet route. The gateway service calls Bedrock through this route.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "efs-sg",
+    "label": "MountTargetSecurityGroup",
+    "caption": "TCP 2049 from the host group",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "MountTargetSecurityGroup",
+      "TCP 2049 from",
+      "InstanceSecurityGroup only"
+     ]
+    },
+    "summary": "The EFS security group accepts TCP port 2049. It accepts it from the host security group only.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "mount-target",
+    "label": "MountTarget",
+    "caption": "One target in Subnet",
+    "group": "aws",
+    "status": "core",
+    "frame": "aws-core/vpc",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "MountTarget",
+      "One target in Subnet",
+      "EFS uses TLS and IAM"
+     ]
+    },
+    "summary": "One mount target in the subnet serves EFS to the instance. The mount uses TLS and IAM.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "stack-secret",
+    "label": "Secrets Manager",
+    "caption": "\u003cproject\u003e/env",
+    "group": "identity",
+    "status": "core",
+    "frame": "aws-core/services",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Secrets Manager",
+      "\u003cproject\u003e/env",
+      "Host reads / installer writes"
+     ]
+    },
+    "summary": "The stack secret \u003cproject\u003e/env holds the environment of the host. The installer writes it before the deploy. The host reads it at the first boot.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "bedrock",
+    "label": "Bedrock",
+    "caption": "GPT-6 Luna / xhigh",
+    "group": "service",
+    "status": "core",
+    "frame": "services/external",
+    "diagrams": [
+     "aws-core",
+     "services"
+    ],
+    "cards": {
+     "aws-core": [
+      "Bedrock",
+      "GPT-6 Luna / xhigh",
+      "Titan text embeddings v2"
+     ],
+     "services": [
+      "Bedrock",
+      "GPT-6 Luna / xhigh",
+      "Titan v2 / 1024 dimensions"
+     ]
+    },
+    "summary": "Bedrock serves GPT-6 Luna at the reasoning effort xhigh. It also serves Titan text embeddings v2 with 1024 dimensions. The gateway calls it as bedrock/luna and bedrock/embed with the instance role.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "compose.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "efs",
+    "label": "FileSystem / EFS",
+    "caption": "Encrypted / retained",
+    "group": "data",
+    "status": "core",
+    "frame": "aws-core/services",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "FileSystem / EFS",
+      "Encrypted / retained",
+      "Three access points"
+     ]
+    },
+    "summary": "The encrypted EFS file system holds the shared files. The stack retains it. It has three access points.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml"
+    ]
+   },
+   {
+    "id": "access-points",
+    "label": "Access points",
+    "caption": "UID:GID for each service",
+    "group": "data",
+    "status": "core",
+    "frame": "aws-core/services",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Access points / UID:GID",
+      "open-knowledge 10001:10001",
+      "openviking 1101:1101",
+      "shared 1102:1102"
+     ]
+    },
+    "summary": "The open-knowledge access point enforces 10001:10001. The openviking access point enforces 1101:1101. The shared access point enforces 1102:1102.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "bucket",
+    "label": "Bucket / S3",
+    "caption": "EnableBucket=true",
+    "group": "data",
+    "status": "option",
+    "frame": "aws-core/services",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Bucket / S3",
+      "EnableBucket=true",
+      "Private / SSE-S3 / retained"
+     ]
+    },
+    "summary": "EnableBucket=true adds a private S3 bucket with SSE-S3 encryption. The stack retains it. The instance role gets scoped object access only after the policy update.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "snapshots",
+    "label": "Data-volume snapshots",
+    "caption": "03:00 UTC / keep seven",
+    "group": "data",
+    "status": "option",
+    "frame": "aws-core/operations",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Daily data-volume snapshots",
+      "03:00 UTC / keep seven",
+      "bootstrap-\u003cProject\u003e-dlm"
+     ]
+    },
+    "summary": "EnableOperations adds a daily snapshot of the data volume at 03:00 UTC. It keeps seven snapshots. The administrator owns the snapshot role bootstrap-\u003cProject\u003e-dlm, and the provisioner cannot change it.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "scripts/aws-provisioner.cfn.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "host-logs",
+    "label": "Host logs / CloudWatch",
+    "caption": "/\u003cProject\u003e/host / 14 days",
+    "group": "data",
+    "status": "option",
+    "frame": "aws-core/operations",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Host logs / CloudWatch",
+      "/\u003cProject\u003e/host / 14 days",
+      "Journal export each minute"
+     ]
+    },
+    "summary": "EnableOperations adds the log group /\u003cProject\u003e/host. The log group keeps the logs for 14 days. The host exports its journal each minute.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "scripts/aws-provisioner.cfn.yaml"
+    ]
+   },
+   {
+    "id": "billing-alarm",
+    "label": "Billing alarm + SNS topic",
+    "caption": "us-east-1",
+    "group": "aws",
+    "status": "option",
+    "frame": "aws-core/operations",
+    "diagrams": [
+     "aws-core"
+    ],
+    "cards": {
+     "aws-core": [
+      "Billing alarm + SNS topic",
+      "\u003cProject\u003e-billing / -alarm",
+      "us-east-1"
+     ]
+    },
+    "summary": "EnableOperations adds the billing alarm \u003cProject\u003e-billing and its topic \u003cProject\u003e-alarm. The billing metric is in us-east-1 only.",
+    "sources": [
+     "scripts/aws-host.cfn.yaml",
+     "scripts/aws-provisioner.cfn.yaml"
+    ]
+   },
+   {
+    "id": "caddy",
+    "label": "caddy",
+    "caption": "Core edge / TCP 80, 443",
+    "group": "service",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services",
+     "entra-login",
+     "options"
+    ],
+    "cards": {
+     "services": [
+      "caddy / edge-core",
+      "TCP 80 / 443",
+      "EBS: certificate state"
+     ],
+     "entra-login": [
+      "caddy",
+      "Ends HTTPS",
+      "Routes ok to ok-auth"
+     ],
+     "options": [
+      "caddy",
+      "One certificate per name",
+      "HTTP-01 or TLS-ALPN-01"
+     ]
+    },
+    "summary": "Caddy is the core edge and the only service that publishes ports. It ends HTTPS with one certificate for each selected name. It routes ok to ok-auth, never to open-knowledge. The Pangolin option replaces it.",
+    "sources": [
+     "compose.caddy.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "ok-auth",
+    "label": "ok-auth",
+    "caption": "oauth2-proxy / HTTP 4180",
+    "group": "identity",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services",
+     "entra-login"
+    ],
+    "cards": {
+     "services": [
+      "ok-auth / oauth2-proxy",
+      "HTTP 4180",
+      "Entra ID group check"
+     ],
+     "entra-login": [
+      "ok-auth / HTTP 4180",
+      "5. Check token",
+      "6. Check allowed group"
+     ]
+    },
+    "summary": "The gate is oauth2-proxy on HTTP port 4180. It checks the Entra token and the allowed group. Only an allowed session reaches OpenKnowledge. It is the only member of gate-egress.",
+    "sources": [
+     "compose.yaml",
+     "ok-auth/oauth2-proxy.cfg",
+     "docs/entra.md"
+    ]
+   },
+   {
+    "id": "open-knowledge",
+    "label": "open-knowledge",
+    "caption": "HTTP 80 / no login here",
+    "group": "service",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services",
+     "entra-login"
+    ],
+    "cards": {
+     "services": [
+      "open-knowledge",
+      "HTTP 80 / no login here",
+      "EFS: open-knowledge, shared"
+     ],
+     "entra-login": [
+      "open-knowledge",
+      "HTTP 80",
+      "Private knowledge network"
+     ]
+    },
+    "summary": "OpenKnowledge listens on HTTP port 80 and has no login of its own. The gate reaches it on knowledge, and the agent reaches it on knowledge-agent. It keeps its files on EFS. It makes no model call.",
+    "sources": [
+     "compose.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "pi-durable",
+    "label": "pi-durable",
+    "caption": "Basic agent / HTTP 5470",
+    "group": "service",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services"
+    ],
+    "cards": {
+     "services": [
+      "pi-durable / basic agent",
+      "HTTP 5470 / no web search",
+      "EBS: state / EFS: shared"
+     ]
+    },
+    "summary": "The basic agent has no web search. It calls OpenViking with a user key and the gateway with a virtual key. It calls OpenKnowledge directly, not through the gate. Its state is on EBS.",
+    "sources": [
+     "compose.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "openviking",
+    "label": "openviking",
+    "caption": "Memory / HTTP 1933",
+    "group": "service",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services"
+    ],
+    "cards": {
+     "services": [
+      "openviking",
+      "HTTP 1933 / bot off",
+      "EFS: openviking, shared"
+     ]
+    },
+    "summary": "OpenViking is the memory service on HTTP port 1933. Its bot is off. It calls the gateway for embeddings and vision with its own virtual key. It keeps its data on EFS.",
+    "sources": [
+     "compose.yaml",
+     "openviking/ov.conf",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "litellm",
+    "label": "litellm",
+    "caption": "Gateway / HTTP 4000",
+    "group": "service",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services"
+    ],
+    "cards": {
+     "services": [
+      "litellm / gateway",
+      "HTTP 4000",
+      "bedrock/luna + bedrock/embed"
+     ]
+    },
+    "summary": "LiteLLM is the model gateway on HTTP port 4000. It serves bedrock/luna at xhigh and bedrock/embed. It keeps its data in Postgres. Its outbound calls use egress.",
+    "sources": [
+     "compose.yaml",
+     "litellm/config.yaml",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "litellm-db",
+    "label": "litellm-db",
+    "caption": "Postgres / TCP 5432",
+    "group": "data",
+    "status": "core",
+    "frame": "services/compose",
+    "diagrams": [
+     "services"
+    ],
+    "cards": {
+     "services": [
+      "litellm-db / Postgres",
+      "TCP 5432",
+      "EBS: database"
+     ]
+    },
+    "summary": "Postgres holds the data of the gateway. It listens on TCP port 5432 on the internal network db. Its files are on the EBS data volume.",
+    "sources": [
+     "compose.yaml"
+    ]
+   },
+   {
+    "id": "entra",
+    "label": "Microsoft Entra ID",
+    "caption": "One tenant / allowed group",
+    "group": "identity",
+    "status": "core",
+    "frame": "services/external",
+    "diagrams": [
+     "services",
+     "entra-login"
+    ],
+    "cards": {
+     "services": [
+      "Microsoft Entra ID",
+      "One tenant / allowed group",
+      "Browser login"
+     ],
+     "entra-login": [
+      "Microsoft Entra ID",
+      "Tenant login",
+      "Allowed group claim"
+     ]
+    },
+    "summary": "Microsoft Entra ID is the identity provider of the browser login. One tenant and one allowed group gate OpenKnowledge. The gate reaches it on gate-egress.",
+    "sources": [
+     "compose.yaml",
+     "ok-auth/oauth2-proxy.cfg",
+     "docs/entra.md"
+    ]
+   },
+   {
+    "id": "browser",
+    "label": "Browser",
+    "caption": "Opens ok.\u003cdomain\u003e",
+    "group": "external",
+    "status": "core",
+    "frame": "entra-login/path",
+    "diagrams": [
+     "entra-login"
+    ],
+    "cards": {
+     "entra-login": [
+      "Browser",
+      "Opens ok.\u003cdomain\u003e",
+      "Stores the secure cookie"
+     ]
+    },
+    "summary": "The browser opens ok.\u003cdomain\u003e. It follows the redirect to Entra ID and back to the same public name. It stores the secure session cookie.",
+    "sources": [
+     "docs/entra.md",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-provisioner",
+    "label": "1 / Provisioner",
+    "caption": "Administrator installs IAM",
+    "group": "identity",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "1 / Provisioner",
+      "Administrator installs IAM",
+      "Creates only bounded roles"
+     ]
+    },
+    "summary": "An administrator prepares the provisioner and the boundary. The provisioner creates only bounded roles.",
+    "sources": [
+     "docs/architecture.md",
+     "scripts/aws-provisioner.sh"
+    ]
+   },
+   {
+    "id": "step-env",
+    "label": "2 / .env",
+    "caption": "Core names and Entra values",
+    "group": "identity",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "2 / .env",
+      "Core names and Entra values",
+      "EC2_OPTIONS / edge names"
+     ]
+    },
+    "summary": "The installer sets the core names and the Entra values in .env. EC2_OPTIONS selects the options. The edge names select the public names.",
+    "sources": [
+     "docs/architecture.md",
+     ".env.example"
+    ]
+   },
+   {
+    "id": "step-secret",
+    "label": "3 / secret",
+    "caption": "aws-host.sh secret",
+    "group": "identity",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "3 / secret",
+      "aws-host.sh secret",
+      "Writes \u003cproject\u003e/env"
+     ]
+    },
+    "summary": "aws-host.sh secret writes \u003cproject\u003e/env to Secrets Manager. The secret exists before the deploy, because the first boot reads it.",
+    "sources": [
+     "scripts/aws-host.sh",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-deploy",
+    "label": "4 / deploy",
+    "caption": "aws-host.sh deploy",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "4 / deploy",
+      "aws-host.sh deploy",
+      "CloudFormation makes EC2"
+     ]
+    },
+    "summary": "aws-host.sh deploy runs CloudFormation. It makes the instance and the Elastic IP. A deploy creates billed AWS resources and runs only after approval.",
+    "sources": [
+     "scripts/aws-host.sh",
+     "docs/architecture.md",
+     "README.md"
+    ]
+   },
+   {
+    "id": "step-dns",
+    "label": "5 / outputs and dns",
+    "caption": "Reads the Elastic IP",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "5 / outputs and dns",
+      "Reads the Elastic IP",
+      "Sets selected A records"
+     ]
+    },
+    "summary": "The DNS step reads the Elastic IP from the stack. It sets the A records of the selected names while the host boots. DNS is necessary for public access and certificates, not for the internal checks.",
+    "sources": [
+     "scripts/aws-host.sh",
+     "scripts/dns-records.sh",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-user-data",
+    "label": "6 / user data",
+    "caption": "Check snapshot / mount data",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/host",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "6 / user data",
+      "Check snapshot / mount data",
+      "Docker requires four mounts"
+     ]
+    },
+    "summary": "User data checks the snapshot commit before it runs a script of the clone. It installs the host tools and mounts the EBS data volume and the EFS access points. Docker requires the four durable mounts and the metadata guard.",
+    "sources": [
+     "scripts/host-userdata.sh",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-bootstrap",
+    "label": "7 / host-bootstrap.sh",
+    "caption": "Reads secret / writes .env",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/host",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "7 / host-bootstrap.sh",
+      "Reads secret / writes .env",
+      "Selects COMPOSE_FILE"
+     ]
+    },
+    "summary": "The bootstrap reads the secret and writes the host environment file. It selects COMPOSE_FILE for the selected options. A manual Compose command uses the same overlays.",
+    "sources": [
+     "scripts/host-bootstrap.sh",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-kits",
+    "label": "8 / kits.lock",
+    "caption": "Clone tags / check commits",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/host",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "8 / kits.lock",
+      "Clone tags / check commits",
+      "Build one kit at a time"
+     ]
+    },
+    "summary": "The bootstrap clones the kit tags of kits.lock and checks their commits. It uses the pins only. It builds one kit at a time.",
+    "sources": [
+     "scripts/host-bootstrap.sh",
+     "kits.lock"
+    ]
+   },
+   {
+    "id": "step-start",
+    "label": "9 / start and keys",
+    "caption": "Makes scoped service keys",
+    "group": "service",
+    "status": "core",
+    "frame": "install-flow/host",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "9 / start and keys",
+      "Edge, gateway, memory, rest",
+      "Makes scoped service keys"
+     ]
+    },
+    "summary": "The bootstrap starts the edge, the gateway, memory and the rest. It makes scoped service keys. The host keeps them, and the installer saves them and updates the secret after boot.",
+    "sources": [
+     "scripts/host-bootstrap.sh",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "step-verify",
+    "label": "10 / verify",
+    "caption": "One SSM command",
+    "group": "aws",
+    "status": "core",
+    "frame": "install-flow/installer",
+    "diagrams": [
+     "install-flow"
+    ],
+    "cards": {
+     "install-flow": [
+      "10 / verify",
+      "One SSM command",
+      "Four internal check parts"
+     ]
+    },
+    "summary": "aws-host.sh verify sends one SSM command with four parts: docker compose ps, the file-set test, the service list and verify-deployed.py. The probes use internal endpoints only. They prove no login, public route or model answer.",
+    "sources": [
+     "scripts/aws-host.sh",
+     "scripts/verify-deployed.py",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "core-services",
+    "label": "Core services",
+    "caption": "Bedrock / Entra ID",
+    "group": "service",
+    "status": "core",
+    "frame": "options/core",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Core services",
+      "Bedrock / Entra ID",
+      "Agent / knowledge / memory"
+     ]
+    },
+    "summary": "The portable core uses Bedrock and Entra ID. It runs the agent, knowledge and memory. It needs no option and no home lab.",
+    "sources": [
+     ".env.example",
+     "docs/options/README.md"
+    ]
+   },
+   {
+    "id": "pangolin",
+    "label": "pangolin / gerbil / traefik",
+    "caption": "Replaces caddy",
+    "group": "service",
+    "status": "option",
+    "frame": "options/pangolin",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "pangolin / gerbil / traefik",
+      "Replaces caddy",
+      "Adds the blueprint"
+     ]
+    },
+    "summary": "EC2_OPTIONS=pangolin adds Pangolin, Gerbil and Traefik in place of caddy. Gerbil publishes 80, 443 and the two tunnel UDP ports. The blueprint keeps ok-auth as the target of ok.",
+    "sources": [
+     "compose.pangolin.yaml",
+     "pangolin/blueprint.yaml",
+     "docs/options/pangolin.md"
+    ]
+   },
+   {
+    "id": "newt-site",
+    "label": "Newt / home site",
+    "caption": "Outbound tunnel to Gerbil",
+    "group": "external",
+    "status": "option",
+    "frame": "options/pangolin",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Newt / home site",
+      "Outbound tunnel to Gerbil",
+      "Site uses UDP 51820"
+     ]
+    },
+    "summary": "A home Newt site opens an outbound tunnel to Gerbil. Site traffic uses UDP 51820, and clients use UDP 21820. Both ports open only with Pangolin.",
+    "sources": [
+     "docs/options/home-lab.md",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "porkbun-dns01",
+    "label": "Porkbun DNS-01",
+    "caption": "Wildcard certificate",
+    "group": "identity",
+    "status": "option",
+    "frame": "options/pangolin",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Porkbun DNS-01",
+      "Wildcard certificate",
+      "Pangolin needs porkbun"
+     ]
+    },
+    "summary": "Traefik uses Porkbun DNS-01 for the wildcard certificate of Pangolin. Thus Pangolin needs EC2_DNS_PROVIDER=porkbun. No record is a wildcard.",
+    "sources": [
+     "docs/options/pangolin.md",
+     "docs/options/dns.md"
+    ]
+   },
+   {
+    "id": "copilot",
+    "label": "copilot",
+    "caption": "Adds a gateway service",
+    "group": "service",
+    "status": "option",
+    "frame": "options/copilot",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "copilot",
+      "Adds a gateway service",
+      "Keeps Bedrock routes"
+     ]
+    },
+    "summary": "EC2_OPTIONS=copilot adds the copilot service. The gateway reaches it on the network copilot. The Bedrock routes stay.",
+    "sources": [
+     "compose.copilot.yaml",
+     "docs/options/copilot.md"
+    ]
+   },
+   {
+    "id": "copilot-routes",
+    "label": "copilot/luna + copilot/embed",
+    "caption": "Luna stays at xhigh",
+    "group": "service",
+    "status": "option",
+    "frame": "options/copilot",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "copilot/luna + copilot/embed",
+      "Luna stays at xhigh",
+      "Requires Copilot login"
+     ]
+    },
+    "summary": "The option adds the routes copilot/luna and copilot/embed. Luna stays at the reasoning effort xhigh. The routes need a Copilot login.",
+    "sources": [
+     "litellm/copilot.yaml",
+     "docs/options/copilot.md"
+    ]
+   },
+   {
+    "id": "copilot-tokens",
+    "label": "Copilot token files",
+    "caption": "EBS data volume",
+    "group": "data",
+    "status": "option",
+    "frame": "options/copilot",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Copilot token files",
+      "EBS data volume",
+      "New login for this host"
+     ]
+    },
+    "summary": "The Copilot token files stay on the EBS data volume. The option needs a new login for this host. With EnableOperations, the volume snapshots also hold the tokens.",
+    "sources": [
+     "compose.copilot.yaml",
+     "docs/options/copilot.md"
+    ]
+   },
+   {
+    "id": "dns-providers",
+    "label": "DNS provider",
+    "caption": "EC2_DNS_PROVIDER",
+    "group": "aws",
+    "status": "core",
+    "frame": "options/dns",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "manual / default",
+      "porkbun / route53",
+      "cloudflare"
+     ]
+    },
+    "summary": "EC2_DNS_PROVIDER selects manual, porkbun, route53 or cloudflare. The default is manual, and you make each record by hand. The other three set the records through an API.",
+    "sources": [
+     "scripts/dns-records.sh",
+     "docs/options/dns.md"
+    ]
+   },
+   {
+    "id": "dns-records",
+    "label": "EC2_EDGE_NAMES",
+    "caption": "Default: ok only",
+    "group": "aws",
+    "status": "core",
+    "frame": "options/dns",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "EC2_EDGE_NAMES",
+      "ok / agent / llm / ov",
+      "Default: ok only"
+     ]
+    },
+    "summary": "EC2_EDGE_NAMES selects the public names: ok, agent, llm and ov. The default is ok only. Each selected name gets an A record to the Elastic IP, and Pangolin adds pangolin.\u003cdomain\u003e.",
+    "sources": [
+     "docs/options/dns.md",
+     "docs/options/README.md"
+    ]
+   },
+   {
+    "id": "dns-credentials",
+    "label": "DNS credentials",
+    "caption": "Stay on installer machine",
+    "group": "identity",
+    "status": "option",
+    "frame": "options/dns",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "DNS credentials",
+      "Stay on installer machine",
+      "Pangolin Porkbun exception"
+     ]
+    },
+    "summary": "DNS provider credentials stay on the installer machine. The Porkbun pair of Pangolin is the only exception. Traefik needs that pair on the host for DNS-01.",
+    "sources": [
+     "docs/options/pangolin.md",
+     "docs/options/README.md"
+    ]
+   },
+   {
+    "id": "home-tools",
+    "label": "Home tools",
+    "caption": "Newt site / web search",
+    "group": "external",
+    "status": "option",
+    "frame": "options/home",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Home tools",
+      "Newt site / web search",
+      "Private kit source"
+     ]
+    },
+    "summary": "Home lab tools are optional: a Newt site, agent web search and private kit sources. The core needs none of them. The locked agent source is private and needs its own read-only clone credential.",
+    "sources": [
+     "docs/options/home-lab.md",
+     "docs/architecture.md"
+    ]
+   },
+   {
+    "id": "credential-stores",
+    "label": "Bitwarden / Vault",
+    "caption": "Optional credential copies",
+    "group": "identity",
+    "status": "option",
+    "frame": "options/home",
+    "diagrams": [
+     "options"
+    ],
+    "cards": {
+     "options": [
+      "Bitwarden / Vault",
+      "Optional credential copies",
+      "Core does not need them"
+     ]
+    },
+    "summary": "Bitwarden and Vault can hold copies of the provisioner key. EC2_CREDENTIAL_STORES=home-lab selects them. The core does not need them.",
+    "sources": [
+     "docs/options/home-lab.md"
+    ]
+   }
+  ],
+  "edges": [
+   {
+    "id": "boundary-role",
+    "from": "boundary",
+    "to": "instance-role",
+    "kind": "dependency",
+    "label": "limits",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "role-instance",
+    "from": "instance-role",
+    "to": "instance",
+    "kind": "dependency",
+    "label": "profile",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "key-instance",
+    "from": "key-pair",
+    "to": "instance",
+    "kind": "dependency",
+    "label": "SSH key",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "eip-sg",
+    "from": "elastic-ip",
+    "to": "instance-sg",
+    "kind": "request",
+    "label": "inbound",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "sg-instance",
+    "from": "instance-sg",
+    "to": "instance",
+    "kind": "request",
+    "label": "filter",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "instance-volume",
+    "from": "instance",
+    "to": "data-volume",
+    "kind": "dependency",
+    "label": "attach",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "instance-mount",
+    "from": "instance",
+    "to": "mount-target",
+    "kind": "request",
+    "label": "NFS",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "efssg-mount",
+    "from": "efs-sg",
+    "to": "mount-target",
+    "kind": "dependency",
+    "label": "filter",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "mount-efs",
+    "from": "mount-target",
+    "to": "efs",
+    "kind": "request",
+    "label": "TLS + IAM",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "efs-aps",
+    "from": "efs",
+    "to": "access-points",
+    "kind": "dependency",
+    "label": "mount via",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "instance-route",
+    "from": "instance",
+    "to": "internet-route",
+    "kind": "request",
+    "label": "outbound",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "provisioner-role",
+    "from": "provisioner",
+    "to": "instance-role",
+    "kind": "dependency",
+    "label": "creates, bounded",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "role-secret",
+    "from": "instance-role",
+    "to": "stack-secret",
+    "kind": "dependency",
+    "label": "permits read",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "role-bedrock",
+    "from": "instance-role",
+    "to": "bedrock",
+    "kind": "dependency",
+    "label": "permits invoke",
+    "status": "core",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "role-bucket",
+    "from": "instance-role",
+    "to": "bucket",
+    "kind": "dependency",
+    "label": "scoped object access",
+    "status": "option",
+    "source": "scripts/aws-host.cfn.yaml"
+   },
+   {
+    "id": "snapshots-volume",
+    "from": "snapshots",
+    "to": "data-volume",
+    "kind": "dependency",
+    "label": "daily snapshot",
+    "status": "option",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "instance-logs",
+    "from": "instance",
+    "to": "host-logs",
+    "kind": "request",
+    "label": "journal export",
+    "status": "option",
+    "source": "docs/diagrams/01-aws-core.json"
+   },
+   {
+    "id": "caddy-auth",
+    "from": "caddy",
+    "to": "ok-auth",
+    "kind": "request",
+    "label": "edge-ok",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "auth-ok",
+    "from": "ok-auth",
+    "to": "open-knowledge",
+    "kind": "request",
+    "label": "knowledge",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "agent-ov",
+    "from": "pi-durable",
+    "to": "openviking",
+    "kind": "request",
+    "label": "memory / user key",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "ov-llm",
+    "from": "openviking",
+    "to": "litellm",
+    "kind": "request",
+    "label": "llm / virtual key",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "agent-llm",
+    "from": "pi-durable",
+    "to": "litellm",
+    "kind": "request",
+    "label": "llm / virtual key",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "llm-db",
+    "from": "litellm",
+    "to": "litellm-db",
+    "kind": "request",
+    "label": "db",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "llm-bedrock",
+    "from": "litellm",
+    "to": "bedrock",
+    "kind": "request",
+    "label": "egress / instance role",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "agent-ok",
+    "from": "pi-durable",
+    "to": "open-knowledge",
+    "kind": "request",
+    "label": "knowledge-agent / direct call",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "auth-entra",
+    "from": "ok-auth",
+    "to": "entra",
+    "kind": "request",
+    "label": "gate-egress / OIDC",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "caddy-volume",
+    "from": "caddy",
+    "to": "data-volume",
+    "kind": "dependency",
+    "label": "certificate state",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "db-volume",
+    "from": "litellm-db",
+    "to": "data-volume",
+    "kind": "dependency",
+    "label": "database",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "agent-volume",
+    "from": "pi-durable",
+    "to": "data-volume",
+    "kind": "dependency",
+    "label": "state",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "agent-aps",
+    "from": "pi-durable",
+    "to": "access-points",
+    "kind": "dependency",
+    "label": "shared",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "ok-aps",
+    "from": "open-knowledge",
+    "to": "access-points",
+    "kind": "dependency",
+    "label": "open-knowledge, shared",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "ov-aps",
+    "from": "openviking",
+    "to": "access-points",
+    "kind": "dependency",
+    "label": "openviking, shared",
+    "status": "core",
+    "source": "docs/diagrams/02-services.json"
+   },
+   {
+    "id": "login-1",
+    "from": "browser",
+    "to": "caddy",
+    "kind": "login-step",
+    "label": "1. HTTPS request",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-1b",
+    "from": "caddy",
+    "to": "ok-auth",
+    "kind": "login-step",
+    "label": "1. HTTP proxy",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-2",
+    "from": "ok-auth",
+    "to": "browser",
+    "kind": "login-step",
+    "label": "2. No session: redirect to Entra ID",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-3",
+    "from": "browser",
+    "to": "entra",
+    "kind": "login-step",
+    "label": "3. Sign in",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-3b",
+    "from": "entra",
+    "to": "ok-auth",
+    "kind": "login-step",
+    "label": "3. Callback via browser + edge",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-4",
+    "from": "ok-auth",
+    "to": "entra",
+    "kind": "login-step",
+    "label": "4. Code / token: gate-egress",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-7",
+    "from": "ok-auth",
+    "to": "browser",
+    "kind": "login-step",
+    "label": "7. Set __Host-ok cookie",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "login-8",
+    "from": "ok-auth",
+    "to": "open-knowledge",
+    "kind": "login-step",
+    "label": "8. Valid session",
+    "status": "core",
+    "source": "docs/diagrams/03-entra-login.json"
+   },
+   {
+    "id": "install-a",
+    "from": "step-provisioner",
+    "to": "step-env",
+    "kind": "install-step",
+    "label": "prepare",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-b",
+    "from": "step-env",
+    "to": "step-secret",
+    "kind": "install-step",
+    "label": "validate",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-c",
+    "from": "step-secret",
+    "to": "step-deploy",
+    "kind": "install-step",
+    "label": "before boot",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-d",
+    "from": "step-deploy",
+    "to": "step-dns",
+    "kind": "install-step",
+    "label": "outputs",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-e",
+    "from": "step-deploy",
+    "to": "step-user-data",
+    "kind": "install-step",
+    "label": "EC2 first boot",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-f",
+    "from": "step-user-data",
+    "to": "step-bootstrap",
+    "kind": "install-step",
+    "label": "prepared host",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-g",
+    "from": "step-bootstrap",
+    "to": "step-kits",
+    "kind": "install-step",
+    "label": "pins only",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-h",
+    "from": "step-kits",
+    "to": "step-start",
+    "kind": "install-step",
+    "label": "images",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-i",
+    "from": "step-start",
+    "to": "step-verify",
+    "kind": "install-step",
+    "label": "after bootstrap",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "install-j",
+    "from": "step-dns",
+    "to": "step-verify",
+    "kind": "install-step",
+    "label": "DNS for public access, not internal probes",
+    "status": "core",
+    "source": "docs/diagrams/04-install-flow.json"
+   },
+   {
+    "id": "prepare-provisioner",
+    "from": "step-provisioner",
+    "to": "provisioner",
+    "kind": "install-step",
+    "label": "prepares",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "write-secret",
+    "from": "step-secret",
+    "to": "stack-secret",
+    "kind": "install-step",
+    "label": "writes",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "deploy-instance",
+    "from": "step-deploy",
+    "to": "instance",
+    "kind": "install-step",
+    "label": "makes",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "deploy-eip",
+    "from": "step-deploy",
+    "to": "elastic-ip",
+    "kind": "install-step",
+    "label": "makes",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "dns-names",
+    "from": "step-dns",
+    "to": "dns-records",
+    "kind": "install-step",
+    "label": "sets the selected names",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "userdata-volume",
+    "from": "step-user-data",
+    "to": "data-volume",
+    "kind": "install-step",
+    "label": "mounts",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "userdata-aps",
+    "from": "step-user-data",
+    "to": "access-points",
+    "kind": "install-step",
+    "label": "mounts",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "bootstrap-secret",
+    "from": "step-bootstrap",
+    "to": "stack-secret",
+    "kind": "install-step",
+    "label": "reads",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "start-core",
+    "from": "step-start",
+    "to": "core-services",
+    "kind": "install-step",
+    "label": "starts",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "verify-instance",
+    "from": "step-verify",
+    "to": "instance",
+    "kind": "install-step",
+    "label": "one SSM command",
+    "status": "core",
+    "source": "docs/architecture.md"
+   },
+   {
+    "id": "pangolin-replaces",
+    "from": "pangolin",
+    "to": "caddy",
+    "kind": "dependency",
+    "label": "replaces",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "newt-tunnel",
+    "from": "newt-site",
+    "to": "pangolin",
+    "kind": "request",
+    "label": "tunnel",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "wildcard",
+    "from": "porkbun-dns01",
+    "to": "pangolin",
+    "kind": "dependency",
+    "label": "TLS setup",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "copilot-adds",
+    "from": "copilot",
+    "to": "copilot-routes",
+    "kind": "dependency",
+    "label": "adds",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "copilot-state",
+    "from": "copilot",
+    "to": "copilot-tokens",
+    "kind": "dependency",
+    "label": "keeps state",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "dns-selected",
+    "from": "dns-providers",
+    "to": "dns-records",
+    "kind": "dependency",
+    "label": "selected records",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "pangolin-gate",
+    "from": "pangolin",
+    "to": "ok-auth",
+    "kind": "request",
+    "label": "ok resource target",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "records-eip",
+    "from": "dns-records",
+    "to": "elastic-ip",
+    "kind": "dependency",
+    "label": "A record",
+    "status": "core",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "dns01-pair",
+    "from": "porkbun-dns01",
+    "to": "dns-credentials",
+    "kind": "dependency",
+    "label": "Porkbun pair on the host",
+    "status": "option",
+    "source": "docs/diagrams/05-options.json"
+   },
+   {
+    "id": "providers-creds",
+    "from": "dns-providers",
+    "to": "dns-credentials",
+    "kind": "dependency",
+    "label": "provider credentials",
+    "status": "option",
+    "source": "docs/options/dns.md"
+   },
+   {
+    "id": "llm-copilot",
+    "from": "litellm",
+    "to": "copilot",
+    "kind": "request",
+    "label": "network copilot",
+    "status": "option",
+    "source": "compose.copilot.yaml"
+   },
+   {
+    "id": "agent-search",
+    "from": "pi-durable",
+    "to": "home-tools",
+    "kind": "request",
+    "label": "web search",
+    "status": "option",
+    "source": "docs/options/home-lab.md"
+   },
+   {
+    "id": "kits-private",
+    "from": "step-kits",
+    "to": "home-tools",
+    "kind": "dependency",
+    "label": "private kit source",
+    "status": "option",
+    "source": "docs/options/home-lab.md"
+   },
+   {
+    "id": "provisioner-stores",
+    "from": "provisioner",
+    "to": "credential-stores",
+    "kind": "dependency",
+    "label": "optional key copy",
+    "status": "option",
+    "source": "docs/options/home-lab.md"
+   }
+  ],
+  "tours": [
+   {
+    "id": "aws-core",
+    "label": "01 AWS core",
+    "diagram": "aws-core",
+    "steps": [
+     {
+      "nodes": [
+       "provisioner",
+       "boundary",
+       "instance-role"
+      ],
+      "text": "The provisioner is a scoped IAM user. It deploys the host stack. Each host role gets the permissions boundary."
+     },
+     {
+      "nodes": [
+       "instance-role",
+       "key-pair",
+       "instance"
+      ],
+      "text": "InstanceProfile attaches InstanceRole to the instance. The stack imports the SSH public key. The private key stays off EC2."
+     },
+     {
+      "nodes": [
+       "elastic-ip",
+       "instance-sg",
+       "instance"
+      ],
+      "text": "The Elastic IP is the stable public address. The security group accepts TCP 80 and 443, and SSH from AdminCidr only."
+     },
+     {
+      "nodes": [
+       "instance",
+       "internet-route"
+      ],
+      "text": "One public subnet holds the instance. Its outbound traffic uses the internet gateway and the default route."
+     },
+     {
+      "nodes": [
+       "instance",
+       "data-volume"
+      ],
+      "text": "The encrypted gp3 data volume holds Postgres and the agent state. The stack retains it."
+     },
+     {
+      "nodes": [
+       "efs-sg",
+       "mount-target",
+       "efs",
+       "access-points"
+      ],
+      "text": "EFS accepts TCP 2049 from the host security group only. The mount uses TLS and IAM. Three access points fix the user and group ids."
+     },
+     {
+      "nodes": [
+       "instance-role",
+       "stack-secret",
+       "bedrock"
+      ],
+      "text": "InstanceRole lets the host read its secret and invoke Bedrock. No provisioner key goes to EC2."
+     },
+     {
+      "nodes": [
+       "bucket",
+       "snapshots",
+       "host-logs",
+       "billing-alarm"
+      ],
+      "text": "EnableBucket and EnableOperations are separate switches. Both are off by default. They add a bucket, snapshots, host logs and a billing alarm."
+     }
+    ]
+   },
+   {
+    "id": "services",
+    "label": "02 Core services",
+    "diagram": "services",
+    "steps": [
+     {
+      "nodes": [
+       "caddy"
+      ],
+      "text": "The core uses compose.yaml with compose.caddy.yaml. Only caddy publishes ports: TCP 80 and 443."
+     },
+     {
+      "nodes": [
+       "caddy",
+       "ok-auth",
+       "open-knowledge"
+      ],
+      "text": "The public name ok.\u003cdomain\u003e targets ok-auth. The gate sends allowed browser requests to open-knowledge on knowledge."
+     },
+     {
+      "nodes": [
+       "ok-auth",
+       "entra"
+      ],
+      "text": "The gate reaches Microsoft Entra ID on gate-egress. The gate is the only member of that network."
+     },
+     {
+      "nodes": [
+       "pi-durable",
+       "open-knowledge",
+       "openviking"
+      ],
+      "text": "The basic agent calls OpenKnowledge directly on knowledge-agent. Its memory calls go to OpenViking with a user key."
+     },
+     {
+      "nodes": [
+       "pi-durable",
+       "openviking",
+       "litellm",
+       "litellm-db"
+      ],
+      "text": "The agent and OpenViking call litellm with separate virtual keys. The gateway reaches Postgres on db."
+     },
+     {
+      "nodes": [
+       "litellm",
+       "bedrock"
+      ],
+      "text": "The gateway uses the instance role for bedrock/luna at xhigh and bedrock/embed. Its outbound calls use egress."
+     },
+     {
+      "nodes": [
+       "caddy",
+       "litellm-db",
+       "pi-durable",
+       "open-knowledge",
+       "openviking",
+       "data-volume",
+       "access-points"
+      ],
+      "text": "Each card names its store. The EBS data volume holds the database and local state. The EFS access points hold the files of knowledge and memory, and the shared files."
+     }
+    ]
+   },
+   {
+    "id": "entra-login",
+    "label": "03 Entra login",
+    "diagram": "entra-login",
+    "steps": [
+     {
+      "nodes": [
+       "browser",
+       "caddy",
+       "ok-auth"
+      ],
+      "text": "1. The browser opens ok.\u003cdomain\u003e. Caddy ends HTTPS and sends the request to ok-auth on HTTP port 4180."
+     },
+     {
+      "nodes": [
+       "ok-auth",
+       "browser"
+      ],
+      "text": "2. The browser has no session. The gate redirects it to Microsoft Entra ID."
+     },
+     {
+      "nodes": [
+       "browser",
+       "entra",
+       "ok-auth"
+      ],
+      "text": "3. The user signs in. Entra returns the code through the browser to /oauth2/callback on the same public name."
+     },
+     {
+      "nodes": [
+       "ok-auth",
+       "entra"
+      ],
+      "text": "4. The gate exchanges the code on gate-egress. It sends the client secret and the PKCE verifier. Entra returns the ID token."
+     },
+     {
+      "nodes": [
+       "ok-auth"
+      ],
+      "text": "5 and 6. The gate checks the signature, tenant issuer, client id, nonce and expiry. Then it requires the allowed group."
+     },
+     {
+      "nodes": [
+       "ok-auth",
+       "browser"
+      ],
+      "text": "7. The gate sets the Secure, HttpOnly __Host-ok cookie. Then it redirects the browser to the page."
+     },
+     {
+      "nodes": [
+       "ok-auth",
+       "open-knowledge"
+      ],
+      "text": "8. Only an allowed session reaches OpenKnowledge. Each later browser request still passes through the gate."
+     },
+     {
+      "nodes": [
+       "pangolin",
+       "ok-auth"
+      ],
+      "text": "The Pangolin option replaces Caddy, not the gate. Its ok resource has no second login."
+     }
+    ]
+   },
+   {
+    "id": "install-flow",
+    "label": "04 Install flow",
+    "diagram": "install-flow",
+    "steps": [
+     {
+      "nodes": [
+       "step-provisioner",
+       "provisioner"
+      ],
+      "text": "1. An administrator prepares the provisioner and the boundary. The provisioner creates only bounded roles."
+     },
+     {
+      "nodes": [
+       "step-env"
+      ],
+      "text": "2. The installer sets the core names and the Entra values in .env. EC2_OPTIONS and the edge names select the options."
+     },
+     {
+      "nodes": [
+       "step-secret",
+       "stack-secret"
+      ],
+      "text": "3. aws-host.sh secret writes \u003cproject\u003e/env to Secrets Manager. The first boot reads it."
+     },
+     {
+      "nodes": [
+       "step-deploy",
+       "instance",
+       "elastic-ip"
+      ],
+      "text": "4. aws-host.sh deploy runs CloudFormation. It makes the instance and the Elastic IP."
+     },
+     {
+      "nodes": [
+       "step-dns",
+       "dns-records"
+      ],
+      "text": "5. The DNS step reads the Elastic IP. It sets the selected A records while the host boots."
+     },
+     {
+      "nodes": [
+       "step-user-data",
+       "data-volume",
+       "access-points"
+      ],
+      "text": "6. User data checks the snapshot commit and mounts the data. Docker requires four durable mounts and the metadata guard."
+     },
+     {
+      "nodes": [
+       "step-bootstrap",
+       "stack-secret"
+      ],
+      "text": "7. The bootstrap reads the secret and writes the host .env. It selects COMPOSE_FILE."
+     },
+     {
+      "nodes": [
+       "step-kits"
+      ],
+      "text": "8. The bootstrap clones the kit tags of kits.lock and checks the commits. It builds one kit at a time."
+     },
+     {
+      "nodes": [
+       "step-start",
+       "core-services"
+      ],
+      "text": "9. The bootstrap starts the edge, the gateway, memory and the rest. It makes scoped service keys."
+     },
+     {
+      "nodes": [
+       "step-verify",
+       "instance"
+      ],
+      "text": "10. aws-host.sh verify sends one SSM command with four internal check parts. It proves no public route."
+     }
+    ]
+   },
+   {
+    "id": "options",
+    "label": "05 Options",
+    "diagram": "options",
+    "steps": [
+     {
+      "nodes": [
+       "core-services",
+       "caddy"
+      ],
+      "text": "The portable core needs no option. An option stays off until the installer selects it."
+     },
+     {
+      "nodes": [
+       "pangolin",
+       "caddy",
+       "ok-auth"
+      ],
+      "text": "EC2_OPTIONS=pangolin replaces caddy with Pangolin, Gerbil and Traefik. The ok resource still targets the gate."
+     },
+     {
+      "nodes": [
+       "newt-site",
+       "pangolin"
+      ],
+      "text": "A home Newt site opens an outbound tunnel to Gerbil. Sites use UDP 51820, and clients use UDP 21820."
+     },
+     {
+      "nodes": [
+       "porkbun-dns01",
+       "dns-credentials",
+       "pangolin"
+      ],
+      "text": "Pangolin needs Porkbun DNS-01 for its wildcard certificate. Its Porkbun pair is the only DNS credential on the host."
+     },
+     {
+      "nodes": [
+       "copilot",
+       "copilot-routes",
+       "copilot-tokens",
+       "litellm"
+      ],
+      "text": "EC2_OPTIONS=copilot adds the copilot service and its model routes. The Bedrock routes stay. The token files stay on the EBS data volume."
+     },
+     {
+      "nodes": [
+       "dns-providers",
+       "dns-records",
+       "dns-credentials",
+       "elastic-ip"
+      ],
+      "text": "EC2_DNS_PROVIDER selects manual, porkbun, route53 or cloudflare. Each selected name gets an A record to the Elastic IP."
+     },
+     {
+      "nodes": [
+       "home-tools",
+       "credential-stores",
+       "pi-durable",
+       "step-kits",
+       "provisioner"
+      ],
+      "text": "Home lab tools stay optional: a Newt site, web search and private kit sources. Bitwarden and Vault hold optional credential copies."
+     }
+    ]
+   }
+  ]
+ },
+ "geometry": {
+  "node": {
+   "w": 230,
+   "h": 58
+  },
+  "nodes": {
+   "provisioner": [
+    66,
+    428
+   ],
+   "boundary": [
+    66,
+    510
+   ],
+   "instance-role": [
+    360,
+    510
+   ],
+   "key-pair": [
+    66,
+    592
+   ],
+   "elastic-ip": [
+    694,
+    469
+   ],
+   "instance-sg": [
+    988,
+    510
+   ],
+   "instance": [
+    1282,
+    510
+   ],
+   "data-volume": [
+    1576,
+    428
+   ],
+   "internet-route": [
+    1576,
+    510
+   ],
+   "efs-sg": [
+    694,
+    551
+   ],
+   "mount-target": [
+    1576,
+    592
+   ],
+   "stack-secret": [
+    488.5,
+    786
+   ],
+   "bedrock": [
+    1618,
+    1144
+   ],
+   "efs": [
+    488.5,
+    868
+   ],
+   "access-points": [
+    782.5,
+    868
+   ],
+   "bucket": [
+    488.5,
+    950
+   ],
+   "snapshots": [
+    1135,
+    786
+   ],
+   "host-logs": [
+    1135,
+    868
+   ],
+   "billing-alarm": [
+    1135,
+    950
+   ],
+   "caddy": [
+    402,
+    1144
+   ],
+   "ok-auth": [
+    696,
+    1144
+   ],
+   "open-knowledge": [
+    990,
+    1144
+   ],
+   "pi-durable": [
+    402,
+    1226
+   ],
+   "openviking": [
+    696,
+    1226
+   ],
+   "litellm": [
+    990,
+    1226
+   ],
+   "litellm-db": [
+    1284,
+    1185
+   ],
+   "entra": [
+    1618,
+    1226
+   ],
+   "browser": [
+    46,
+    1185
+   ],
+   "step-provisioner": [
+    86,
+    40
+   ],
+   "step-env": [
+    380,
+    40
+   ],
+   "step-secret": [
+    674,
+    40
+   ],
+   "step-deploy": [
+    968,
+    40
+   ],
+   "step-dns": [
+    1262,
+    40
+   ],
+   "step-user-data": [
+    380,
+    234
+   ],
+   "step-bootstrap": [
+    674,
+    234
+   ],
+   "step-kits": [
+    968,
+    234
+   ],
+   "step-start": [
+    1262,
+    234
+   ],
+   "step-verify": [
+    1556,
+    40
+   ],
+   "core-services": [
+    193,
+    1461
+   ],
+   "pangolin": [
+    821,
+    1461
+   ],
+   "newt-site": [
+    527,
+    1420
+   ],
+   "porkbun-dns01": [
+    527,
+    1502
+   ],
+   "copilot": [
+    1155,
+    1461
+   ],
+   "copilot-routes": [
+    1449,
+    1420
+   ],
+   "copilot-tokens": [
+    1449,
+    1502
+   ],
+   "dns-providers": [
+    507,
+    1737
+   ],
+   "dns-records": [
+    801,
+    1696
+   ],
+   "dns-credentials": [
+    801,
+    1778
+   ],
+   "home-tools": [
+    1135,
+    1696
+   ],
+   "credential-stores": [
+    1135,
+    1778
+   ]
+  },
+  "frames": [
+   {
+    "id": "install-flow/installer",
+    "title": "04 / Installer machine / commands",
+    "x": 62,
+    "y": 0,
+    "w": 1748,
+    "h": 122,
+    "members": [
+     "step-provisioner",
+     "step-env",
+     "step-secret",
+     "step-deploy",
+     "step-dns",
+     "step-verify"
+    ]
+   },
+   {
+    "id": "install-flow/host",
+    "title": "04 / EC2 / first boot",
+    "x": 356,
+    "y": 194,
+    "w": 1160,
+    "h": 122,
+    "members": [
+     "step-user-data",
+     "step-bootstrap",
+     "step-kits",
+     "step-start"
+    ]
+   },
+   {
+    "id": "aws-core/install",
+    "title": "01 / Installer / IAM",
+    "x": 42,
+    "y": 388,
+    "w": 572,
+    "h": 286,
+    "members": [
+     "provisioner",
+     "boundary",
+     "instance-role",
+     "key-pair"
+    ]
+   },
+   {
+    "id": "aws-core/vpc",
+    "title": "01 / VPC",
+    "x": 670,
+    "y": 388,
+    "w": 1160,
+    "h": 286,
+    "members": [
+     "elastic-ip",
+     "instance-sg",
+     "instance",
+     "data-volume",
+     "internet-route",
+     "efs-sg",
+     "mount-target"
+    ]
+   },
+   {
+    "id": "aws-core/services",
+    "title": "01 / AWS services",
+    "x": 464.5,
+    "y": 746,
+    "w": 572,
+    "h": 286,
+    "members": [
+     "stack-secret",
+     "efs",
+     "access-points",
+     "bucket"
+    ]
+   },
+   {
+    "id": "aws-core/operations",
+    "title": "01 / EnableOperations=true / optional",
+    "x": 1092.5,
+    "y": 746,
+    "w": 315,
+    "h": 286,
+    "members": [
+     "snapshots",
+     "host-logs",
+     "billing-alarm"
+    ]
+   },
+   {
+    "id": "entra-login/path",
+    "title": "03 / Browser request / one public name",
+    "x": 0,
+    "y": 1104,
+    "w": 322,
+    "h": 204,
+    "members": [
+     "browser"
+    ]
+   },
+   {
+    "id": "services/compose",
+    "title": "02 / EC2 / Docker Compose",
+    "x": 378,
+    "y": 1104,
+    "w": 1160,
+    "h": 204,
+    "members": [
+     "caddy",
+     "ok-auth",
+     "open-knowledge",
+     "pi-durable",
+     "openviking",
+     "litellm",
+     "litellm-db"
+    ]
+   },
+   {
+    "id": "services/external",
+    "title": "02 / External",
+    "x": 1594,
+    "y": 1104,
+    "w": 278,
+    "h": 204,
+    "members": [
+     "bedrock",
+     "entra"
+    ]
+   },
+   {
+    "id": "options/core",
+    "title": "05 / Portable core",
+    "x": 169,
+    "y": 1380,
+    "w": 278,
+    "h": 204,
+    "members": [
+     "core-services"
+    ]
+   },
+   {
+    "id": "options/pangolin",
+    "title": "05 / EC2_OPTIONS: pangolin",
+    "x": 503,
+    "y": 1380,
+    "w": 572,
+    "h": 204,
+    "members": [
+     "pangolin",
+     "newt-site",
+     "porkbun-dns01"
+    ]
+   },
+   {
+    "id": "options/copilot",
+    "title": "05 / EC2_OPTIONS: copilot",
+    "x": 1131,
+    "y": 1380,
+    "w": 572,
+    "h": 204,
+    "members": [
+     "copilot",
+     "copilot-routes",
+     "copilot-tokens"
+    ]
+   },
+   {
+    "id": "options/dns",
+    "title": "05 / EC2_DNS_PROVIDER",
+    "x": 483,
+    "y": 1656,
+    "w": 572,
+    "h": 204,
+    "members": [
+     "dns-providers",
+     "dns-records",
+     "dns-credentials"
+    ]
+   },
+   {
+    "id": "options/home",
+    "title": "05 / Optional home lab tools",
+    "x": 1111,
+    "y": 1656,
+    "w": 278,
+    "h": 204,
+    "members": [
+     "home-tools",
+     "credential-stores"
+    ]
+   }
+  ],
+  "edges": {
+   "boundary-role": {
+    "d": "M296 539 L360 539",
+    "crossings": 0,
+    "lx": 328,
+    "ly": 543
+   },
+   "role-instance": {
+    "d": "M590 539 L968 539 Q978 539 978 529 L978 508 Q978 498 988 498 L1262 498 Q1272 498 1272 508 L1272 534 Q1272 539 1277 539 L1282 539",
+    "crossings": 0,
+    "lx": 784,
+    "ly": 543
+   },
+   "key-instance": {
+    "d": "M296 616 L674 616 Q680 616 680 622 L680 622 Q680 628 686 628 L1262 628 Q1272 628 1272 618 L1272 544 Q1272 539 1277 539 L1282 539",
+    "crossings": 0,
+    "lx": 488,
+    "ly": 620
+   },
+   "eip-sg": {
+    "d": "M924 498 L962 498 Q972 498 972 508 L972 531 Q972 539 980 539 L988 539",
+    "crossings": 0,
+    "lx": 948,
+    "ly": 502
+   },
+   "sg-instance": {
+    "d": "M1218 539 L1282 539",
+    "crossings": 0,
+    "lx": 1250,
+    "ly": 543
+   },
+   "instance-volume": {
+    "d": "M1512 539 L1550 539 Q1560 539 1560 529 L1560 465 Q1560 457 1568 457 L1576 457",
+    "crossings": 0,
+    "lx": 1536,
+    "ly": 543
+   },
+   "instance-mount": {
+    "d": "M1512 539 L1518 539 Q1524 539 1524 545 L1524 606 Q1524 616 1534 616 L1576 616",
+    "crossings": 0,
+    "lx": 1524,
+    "ly": 581.5
+   },
+   "efssg-mount": {
+    "d": "M924 575 L968 575 Q978 575 978 585 L978 606 Q978 616 988 616 L1576 616",
+    "crossings": 0,
+    "lx": 951,
+    "ly": 579
+   },
+   "mount-efs": {
+    "d": "M1576 616 L1568 616 Q1560 616 1560 624 L1560 846 Q1560 856 1550 856 L740.5 856 Q730.5 856 730.5 866 L730.5 891 Q730.5 897 724.5 897 L718.5 897",
+    "crossings": 0,
+    "lx": 1560,
+    "ly": 740
+   },
+   "efs-aps": {
+    "d": "M718.5 897 L782.5 897",
+    "crossings": 0,
+    "lx": 750.5,
+    "ly": 901
+   },
+   "instance-route": {
+    "d": "M1512 539 L1576 539",
+    "crossings": 0,
+    "lx": 1566.4,
+    "ly": 543
+   },
+   "provisioner-role": {
+    "d": "M296 457 L334 457 Q344 457 344 467 L344 531 Q344 539 352 539 L360 539",
+    "crossings": 0,
+    "lx": 344,
+    "ly": 502
+   },
+   "role-secret": {
+    "d": "M471 568 L471 806.2 Q471 815 479.8 815 L488.5 815",
+    "crossings": 0,
+    "lx": 471,
+    "ly": 695.5
+   },
+   "role-bedrock": {
+    "d": "M590 539 L596 539 Q602 539 602 545 L602 740 Q602 750 612 750 L1596 750 Q1606 750 1606 760 L1606 1167 Q1606 1173 1612 1173 L1618 1173",
+    "crossings": 0,
+    "lx": 602,
+    "ly": 648.5
+   },
+   "role-bucket": {
+    "d": "M471 568 L471 581 Q471 587 465 587 L465 587 Q459 587 459 593 L459 964 Q459 974 469 974 L488.5 974",
+    "crossings": 0,
+    "lx": 459,
+    "ly": 861.9
+   },
+   "snapshots-volume": {
+    "d": "M1365 815 L1540 815 Q1550 815 1550 805 L1550 467 Q1550 457 1560 457 L1576 457",
+    "crossings": 0,
+    "lx": 1457.5,
+    "ly": 819
+   },
+   "instance-logs": {
+    "d": "M1397 568 L1397 887 Q1397 897 1387 897 L1365 897",
+    "crossings": 0,
+    "lx": 1397,
+    "ly": 736.5
+   },
+   "caddy-auth": {
+    "d": "M632 1173 L696 1173",
+    "crossings": 0,
+    "lx": 664,
+    "ly": 1177
+   },
+   "auth-ok": {
+    "d": "M926 1173 L990 1173",
+    "crossings": 0,
+    "lx": 958,
+    "ly": 1177
+   },
+   "agent-ov": {
+    "d": "M632 1250 L696 1250",
+    "crossings": 0,
+    "lx": 664,
+    "ly": 1254
+   },
+   "ov-llm": {
+    "d": "M926 1250 L990 1250",
+    "crossings": 0,
+    "lx": 958,
+    "ly": 1254
+   },
+   "agent-llm": {
+    "d": "M632 1250 L637 1250 Q642 1250 642 1245 L642 1224 Q642 1214 652 1214 L968 1214 Q978 1214 978 1224 L978 1244 Q978 1250 984 1250 L990 1250",
+    "crossings": 0,
+    "lx": 810,
+    "ly": 1218
+   },
+   "llm-db": {
+    "d": "M1220 1250 L1262 1250 Q1272 1250 1272 1240 L1272 1220 Q1272 1214 1278 1214 L1284 1214",
+    "crossings": 0,
+    "lx": 1246,
+    "ly": 1254
+   },
+   "llm-bedrock": {
+    "d": "M1220 1250 L1225 1250 Q1230 1250 1230 1245 L1230 1183 Q1230 1173 1240 1173 L1618 1173",
+    "crossings": 0,
+    "lx": 1424,
+    "ly": 1177
+   },
+   "agent-ok": {
+    "d": "M632 1250 L640 1250 Q648 1250 648 1242 L648 1142 Q648 1132 658 1132 L968 1132 Q978 1132 978 1142 L978 1167 Q978 1173 984 1173 L990 1173",
+    "crossings": 0,
+    "lx": 813,
+    "ly": 1136
+   },
+   "auth-entra": {
+    "d": "M926 1173 L931 1173 Q936 1173 936 1178 L936 1293 Q936 1303 946 1303 L1596 1303 Q1606 1303 1606 1293 L1606 1256 Q1606 1250 1612 1250 L1618 1250",
+    "crossings": 0,
+    "lx": 1271,
+    "ly": 1307
+   },
+   "caddy-volume": {
+    "d": "M632 1173 L637 1173 Q642 1173 642 1168 L642 1030 Q642 1020 652 1020 L1534 1020 Q1544 1020 1544 1010 L1544 467 Q1544 457 1554 457 L1576 457",
+    "crossings": 0,
+    "lx": 642,
+    "ly": 1100.5
+   },
+   "db-volume": {
+    "d": "M1514 1214 L1528 1214 Q1538 1214 1538 1204 L1538 467 Q1538 457 1548 457 L1576 457",
+    "crossings": 0,
+    "lx": 1538,
+    "ly": 839.5
+   },
+   "agent-volume": {
+    "d": "M632 1250 L646 1250 Q656 1250 656 1240 L656 1042 Q656 1032 666 1032 L1522 1032 Q1532 1032 1532 1022 L1532 467 Q1532 457 1542 457 L1576 457",
+    "crossings": 0,
+    "lx": 656,
+    "ly": 1145
+   },
+   "agent-aps": {
+    "d": "M632 1250 L652 1250 Q662 1250 662 1240 L662 1054 Q662 1044 672 1044 L763 1044 Q773 1044 773 1034 L773 901.8 Q773 897 777.8 897 L782.5 897",
+    "crossings": 0,
+    "lx": 717.5,
+    "ly": 1048
+   },
+   "ok-aps": {
+    "d": "M1105 1144 L1105 907 Q1105 897 1095 897 L1012.5 897",
+    "crossings": 0,
+    "lx": 1105,
+    "ly": 1024.5
+   },
+   "ov-aps": {
+    "d": "M926 1250 L934 1250 Q942 1250 942 1242 L942 948 Q942 938 932 938 L903.5 938 Q897.5 938 897.5 932 L897.5 926",
+    "crossings": 0,
+    "lx": 942,
+    "ly": 1098
+   },
+   "login-1": {
+    "d": "M276 1214 L380 1214 Q390 1214 390 1204 L390 1179 Q390 1173 396 1173 L402 1173",
+    "crossings": 0,
+    "lx": 333,
+    "ly": 1218
+   },
+   "login-1b": {
+    "d": "M632 1173 L696 1173",
+    "crossings": 0,
+    "lx": 664,
+    "ly": 1177
+   },
+   "login-2": {
+    "d": "M696 1173 L688 1173 Q680 1173 680 1181 L680 1204 Q680 1214 670 1214 L276 1214",
+    "crossings": 0,
+    "lx": 558.8,
+    "ly": 1218
+   },
+   "login-3": {
+    "d": "M276 1214 L282 1214 Q288 1214 288 1220 L288 1310 Q288 1320 298 1320 L1584 1320 Q1594 1320 1594 1310 L1594 1260 Q1594 1250 1604 1250 L1618 1250",
+    "crossings": 0,
+    "lx": 288,
+    "ly": 1271
+   },
+   "login-3b": {
+    "d": "M1618 1250 L1534 1250 Q1524 1250 1524 1240 L1524 1130 Q1524 1120 1514 1120 L946 1120 Q936 1120 936 1130 L936 1168 Q936 1173 931 1173 L926 1173",
+    "crossings": 0,
+    "lx": 1230,
+    "ly": 1124
+   },
+   "login-4": {
+    "d": "M926 1173 L968 1173 Q978 1173 978 1183 L978 1204 Q978 1214 988 1214 L1256 1214 Q1266 1214 1266 1224 L1266 1252 Q1266 1262 1276 1262 L1600 1262 Q1606 1262 1606 1256 L1606 1256 Q1606 1250 1612 1250 L1618 1250",
+    "crossings": 0,
+    "lx": 1122,
+    "ly": 1218
+   },
+   "login-7": {
+    "d": "M696 1173 L688 1173 Q680 1173 680 1165 L680 1118 Q680 1108 670 1108 L310 1108 Q300 1108 300 1118 L300 1204 Q300 1214 290 1214 L276 1214",
+    "crossings": 0,
+    "lx": 490,
+    "ly": 1112
+   },
+   "login-8": {
+    "d": "M926 1173 L990 1173",
+    "crossings": 0,
+    "lx": 958,
+    "ly": 1177
+   },
+   "install-a": {
+    "d": "M316 69 L380 69",
+    "crossings": 0,
+    "lx": 348,
+    "ly": 73
+   },
+   "install-b": {
+    "d": "M610 69 L674 69",
+    "crossings": 0,
+    "lx": 642,
+    "ly": 73
+   },
+   "install-c": {
+    "d": "M904 69 L968 69",
+    "crossings": 0,
+    "lx": 936,
+    "ly": 73
+   },
+   "install-d": {
+    "d": "M1198 69 L1262 69",
+    "crossings": 0,
+    "lx": 1230,
+    "ly": 73
+   },
+   "install-e": {
+    "d": "M968 69 L961 69 Q954 69 954 76 L954 212 Q954 222 944 222 L632 222 Q622 222 622 232 L622 257 Q622 263 616 263 L610 263",
+    "crossings": 0,
+    "lx": 954,
+    "ly": 149.5
+   },
+   "install-f": {
+    "d": "M610 263 L674 263",
+    "crossings": 0,
+    "lx": 642,
+    "ly": 267
+   },
+   "install-g": {
+    "d": "M904 263 L968 263",
+    "crossings": 0,
+    "lx": 936,
+    "ly": 267
+   },
+   "install-h": {
+    "d": "M1198 263 L1262 263",
+    "crossings": 0,
+    "lx": 1230,
+    "ly": 267
+   },
+   "install-i": {
+    "d": "M1492 263 L1534 263 Q1544 263 1544 253 L1544 75 Q1544 69 1550 69 L1556 69",
+    "crossings": 0,
+    "lx": 1544,
+    "ly": 170
+   },
+   "install-j": {
+    "d": "M1492 69 L1556 69",
+    "crossings": 0,
+    "lx": 1524,
+    "ly": 73
+   },
+   "prepare-provisioner": {
+    "d": "M86 69 L60 69 Q50 69 50 79 L50 449 Q50 457 58 457 L66 457",
+    "crossings": 0,
+    "lx": 50,
+    "ly": 267
+   },
+   "write-secret": {
+    "d": "M674 69 L668 69 Q662 69 662 75 L662 764 Q662 774 672 774 L720.5 774 Q730.5 774 730.5 784 L730.5 809 Q730.5 815 724.5 815 L718.5 815",
+    "crossings": 0,
+    "lx": 662,
+    "ly": 425.5
+   },
+   "deploy-instance": {
+    "d": "M1198 69 L1244 69 Q1254 69 1254 79 L1254 529 Q1254 539 1264 539 L1282 539",
+    "crossings": 0,
+    "lx": 1254,
+    "ly": 308
+   },
+   "deploy-eip": {
+    "d": "M968 69 L958 69 Q948 69 948 79 L948 488 Q948 498 938 498 L924 498",
+    "crossings": 0,
+    "lx": 948,
+    "ly": 287.5
+   },
+   "dns-names": {
+    "d": "M1262 69 L1255 69 Q1248 69 1248 76 L1248 728 Q1248 738 1238 738 L1034.5 738 Q1024.5 738 1024.5 748 L1024.5 1098 Q1024.5 1108 1014.5 1108 L982 1108 Q972 1108 972 1118 L972 1439 Q972 1449 982 1449 L1053 1449 Q1063 1449 1063 1459 L1063 1715 Q1063 1725 1053 1725 L1031 1725",
+    "crossings": 0,
+    "lx": 1248,
+    "ly": 407.5
+   },
+   "userdata-volume": {
+    "d": "M610 263 L616 263 Q622 263 622 269 L622 435 Q622 445 632 445 L1554 445 Q1560 445 1560 451 L1560 451 Q1560 457 1566 457 L1576 457",
+    "crossings": 0,
+    "lx": 622,
+    "ly": 358
+   },
+   "userdata-aps": {
+    "d": "M610 263 L624 263 Q634 263 634 273 L634 752 Q634 762 644 762 L763 762 Q773 762 773 772 L773 892.2 Q773 897 777.8 897 L782.5 897",
+    "crossings": 0,
+    "lx": 634,
+    "ly": 516.5
+   },
+   "bootstrap-secret": {
+    "d": "M674 263 L665 263 Q656 263 656 272 L656 728 Q656 738 666 738 L732.5 738 Q742.5 738 742.5 748 L742.5 805 Q742.5 815 732.5 815 L718.5 815",
+    "crossings": 0,
+    "lx": 699.2,
+    "ly": 742
+   },
+   "start-core": {
+    "d": "M1262 263 L1252 263 Q1242 263 1242 273 L1242 716 Q1242 726 1232 726 L759 726 Q749 726 749 736 L749 1110 Q749 1120 739 1120 L678 1120 Q668 1120 668 1130 L668 1374 Q668 1384 658 1384 L445 1384 Q435 1384 435 1394 L435 1484 Q435 1490 429 1490 L423 1490",
+    "crossings": 0,
+    "lx": 1242,
+    "ly": 498.5
+   },
+   "verify-instance": {
+    "d": "M1556 69 L1534 69 Q1524 69 1524 79 L1524 533 Q1524 539 1518 539 L1512 539",
+    "crossings": 0,
+    "lx": 1524,
+    "ly": 308
+   },
+   "pangolin-replaces": {
+    "d": "M821 1490 L775 1490 Q765 1490 765 1480 L765 1313 Q765 1303 755 1303 L652 1303 Q642 1303 642 1293 L642 1178 Q642 1173 637 1173 L632 1173",
+    "crossings": 0,
+    "lx": 765,
+    "ly": 1400.5
+   },
+   "newt-tunnel": {
+    "d": "M757 1449 L801 1449 Q811 1449 811 1459 L811 1485 Q811 1490 816 1490 L821 1490",
+    "crossings": 0,
+    "lx": 784,
+    "ly": 1453
+   },
+   "wildcard": {
+    "d": "M757 1526 L801 1526 Q811 1526 811 1516 L811 1495 Q811 1490 816 1490 L821 1490",
+    "crossings": 0,
+    "lx": 794.8,
+    "ly": 1530
+   },
+   "copilot-adds": {
+    "d": "M1385 1490 L1423 1490 Q1433 1490 1433 1480 L1433 1457 Q1433 1449 1441 1449 L1449 1449",
+    "crossings": 0,
+    "lx": 1409,
+    "ly": 1494
+   },
+   "copilot-state": {
+    "d": "M1385 1490 L1391 1490 Q1397 1490 1397 1496 L1397 1516 Q1397 1526 1407 1526 L1449 1526",
+    "crossings": 0,
+    "lx": 1412.6,
+    "ly": 1530
+   },
+   "dns-selected": {
+    "d": "M737 1766 L779 1766 Q789 1766 789 1756 L789 1731 Q789 1725 795 1725 L801 1725",
+    "crossings": 0,
+    "lx": 789,
+    "ly": 1763.8
+   },
+   "pangolin-gate": {
+    "d": "M936 1461 L936 1338 Q936 1332 942 1332 L942 1332 Q948 1332 948 1326 L948 1183 Q948 1173 938 1173 L926 1173",
+    "crossings": 0,
+    "lx": 936,
+    "ly": 1400.5
+   },
+   "records-eip": {
+    "d": "M1031 1725 L1065 1725 Q1075 1725 1075 1715 L1075 1342 Q1075 1332 1065 1332 L976 1332 Q966 1332 966 1322 L966 948 Q966 938 976 938 L1026.5 938 Q1036.5 938 1036.5 928 L1036.5 597 Q1036.5 587 1026.5 587 L946 587 Q936 587 936 577 L936 504 Q936 498 930 498 L924 498",
+    "crossings": 0,
+    "lx": 1075,
+    "ly": 1532.5
+   },
+   "dns01-pair": {
+    "d": "M757 1526 L765 1526 Q773 1526 773 1534 L773 1792 Q773 1802 783 1802 L801 1802",
+    "crossings": 0,
+    "lx": 773,
+    "ly": 1668
+   },
+   "providers-creds": {
+    "d": "M737 1766 L743 1766 Q749 1766 749 1772 L749 1792 Q749 1802 759 1802 L801 1802",
+    "crossings": 0,
+    "lx": 756.8,
+    "ly": 1806
+   },
+   "llm-copilot": {
+    "d": "M1105 1284 L1105 1480 Q1105 1490 1115 1490 L1155 1490",
+    "crossings": 0,
+    "lx": 1105,
+    "ly": 1391
+   },
+   "agent-search": {
+    "d": "M632 1250 L640 1250 Q648 1250 648 1258 L648 1362 Q648 1372 658 1372 L1109 1372 Q1119 1372 1119 1382 L1119 1717 Q1119 1725 1127 1725 L1135 1725",
+    "crossings": 0,
+    "lx": 648,
+    "ly": 1315
+   },
+   "kits-private": {
+    "d": "M968 263 L961 263 Q954 263 954 270 L954 834 Q954 844 964 844 L1033 844 Q1043 844 1043 854 L1043 1086 Q1043 1096 1033 1096 L970 1096 Q960 1096 960 1106 L960 1427 Q960 1437 970 1437 L1101 1437 Q1111 1437 1111 1447 L1111 1715 Q1111 1725 1121 1725 L1135 1725",
+    "crossings": 0,
+    "lx": 1043,
+    "ly": 974
+   },
+   "provisioner-stores": {
+    "d": "M296 457 L302 457 Q308 457 308 463 L308 1350 Q308 1360 318 1360 L1089 1360 Q1099 1360 1099 1370 L1099 1792 Q1099 1802 1109 1802 L1135 1802",
+    "crossings": 0,
+    "lx": 308,
+    "ly": 912.5
+   }
+  },
+  "bounds": [
+   0,
+   0,
+   1872,
+   1860
+  ]
+ }
+}
+</script>
+<script>
+(function () {
+  "use strict";
+  var NS = "http://www.w3.org/2000/svg";
+  var DATA = JSON.parse(document.getElementById("graph-data").textContent);
+  var G = DATA.graph, GEO = DATA.geometry, NW = GEO.node.w, NH = GEO.node.h;
+
+  function index(list) {
+    var map = Object.create(null);
+    list.forEach(function (item) { map[item.id] = item; });
+    return map;
+  }
+  var nodes = index(G.nodes), groups = index(G.groups), diagrams = index(G.diagrams);
+  var kinds = index(G.edgeKinds), statuses = index(G.statuses), tours = index(G.tours);
+  var outEdges = Object.create(null), inEdges = Object.create(null);
+  G.nodes.forEach(function (n) { outEdges[n.id] = []; inEdges[n.id] = []; });
+  G.edges.forEach(function (e) { outEdges[e.from].push(e); inEdges[e.to].push(e); });
+
+  var state = { selected: null, tour: null, step: 0, path: null, query: "", hideDiagram: {}, hideGroup: {} };
+  var cam = { x: 0, y: 0, k: 1 }, anim = null, drag = null;
+  function byId(id) { return document.getElementById(id); }
+  var svg = byId("canvas"), view = byId("viewport"), tip = byId("tip");
+  var nodeEl = Object.create(null), edgeEl = Object.create(null), labelEl = Object.create(null), frameEl = [];
+
+  function make(name, attrs, parent, text) {
+    var el = document.createElementNS(NS, name);
+    Object.keys(attrs || {}).forEach(function (key) { el.setAttribute(key, attrs[key]); });
+    if (text !== undefined) el.textContent = text;
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function tag(name, cls, parent, text) {
+    var el = document.createElement(name);
+    if (cls) el.className = cls;
+    if (text !== undefined) el.textContent = text;
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function diagramName(id) { return diagrams[id].number + " " + diagrams[id].title; }
+  function steps(count) { return count + (count === 1 ? " step" : " steps"); }
+
+  // A text that is too long for its card gets a smaller font, then a shorter text.
+  function fitText(el, max, size) {
+    var length = el.getComputedTextLength();
+    if (length <= max) return;
+    el.style.fontSize = Math.max(9, Math.floor(size * max / length * 10) / 10) + "px";
+    var text = el.textContent;
+    while (el.getComputedTextLength() > max && text.length > 1) {
+      text = text.slice(0, -1);
+      el.textContent = text + "\u2026";
+    }
+  }
+
+  function draw() {
+    var layer = {};
+    ["backdrop", "frames", "edges", "nodes", "labels"].forEach(function (name) {
+      layer[name] = make("g", { "class": "layer-" + name }, view);
+    });
+    var b = GEO.bounds, margin = 2400;
+    make("rect", { "class": "backdrop", x: b[0] - margin, y: b[1] - margin,
+      width: b[2] - b[0] + 2 * margin, height: b[3] - b[1] + 2 * margin }, layer.backdrop);
+    make("rect", { x: b[0] - margin, y: b[1] - margin, width: b[2] - b[0] + 2 * margin,
+      height: b[3] - b[1] + 2 * margin, fill: "url(#dots)" }, layer.backdrop);
+    GEO.frames.forEach(function (f) {
+      var g = make("g", { "class": "frame" }, layer.frames);
+      make("rect", { x: f.x, y: f.y, width: f.w, height: f.h, rx: 16 }, g);
+      make("text", { "class": "frame-label", x: f.x + 16, y: f.y + 25 }, g, f.title);
+      frameEl.push({ el: g, members: f.members });
+    });
+    G.edges.forEach(function (e) {
+      var r = GEO.edges[e.id];
+      edgeEl[e.id] = make("path", { d: r.d, "class": "edge k-" + e.kind + (e.status === "option" ? " option" : "") }, layer.edges);
+      // The box behind a label is measured while the label is visible, then the label is hidden.
+      var label = make("g", {}, layer.labels), back = make("rect", { rx: 4, height: 16, y: r.ly - 12 }, label);
+      var width = make("text", { x: r.lx, y: r.ly }, label, e.label).getComputedTextLength();
+      back.setAttribute("x", r.lx - width / 2 - 5);
+      back.setAttribute("width", width + 10);
+      label.setAttribute("class", "elabel");
+      labelEl[e.id] = label;
+    });
+    G.nodes.forEach(function (n) {
+      var p = GEO.nodes[n.id];
+      var g = make("g", { "class": "node g-" + n.group + (n.status === "option" ? " option" : ""),
+        transform: "translate(" + p[0] + " " + p[1] + ")", tabindex: "0", role: "button",
+        "aria-label": n.label + ", " + groups[n.group].label + ", " + statuses[n.status].label, "data-id": n.id }, layer.nodes);
+      make("rect", { "class": "card", width: NW, height: NH, rx: 10 }, g);
+      fitText(make("text", { "class": "nlabel", x: 14, y: 25 }, g, n.label), NW - 28, 13.5);
+      fitText(make("text", { "class": "ncaption", x: 14, y: 44 }, g, n.caption), NW - 28, 11.5);
+      nodeEl[n.id] = g;
+    });
+  }
+
+  // --- the camera ---
+  function apply() {
+    view.setAttribute("transform", "translate(" + cam.x.toFixed(2) + " " + cam.y.toFixed(2) + ") scale(" + cam.k.toFixed(4) + ")");
+  }
+  function size() {
+    var r = svg.getBoundingClientRect();
+    return { w: r.width || 800, h: r.height || 600, left: r.left, top: r.top };
+  }
+  function stop() { if (anim) { cancelAnimationFrame(anim); anim = null; } }
+  function moveTo(target, animate) {
+    stop();
+    if (!animate) { cam = target; apply(); return; }
+    var from = { x: cam.x, y: cam.y, k: cam.k }, start = null;
+    function frame(now) {
+      if (start === null) start = now;
+      var t = Math.min(1, (now - start) / 480);
+      var e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      cam = { x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, k: from.k + (target.k - from.k) * e };
+      apply();
+      anim = t < 1 ? requestAnimationFrame(frame) : null;
+    }
+    anim = requestAnimationFrame(frame);
+  }
+  function boxOf(ids) {
+    var b = [Infinity, Infinity, -Infinity, -Infinity];
+    ids.forEach(function (id) {
+      var p = GEO.nodes[id];
+      b = [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0] + NW), Math.max(b[3], p[1] + NH)];
+    });
+    return b;
+  }
+  function fitBox(b, maxK, animate) {
+    var s = size(), pad = 56;
+    var k = Math.min((s.w - 2 * pad) / Math.max(b[2] - b[0], 1), (s.h - 2 * pad) / Math.max(b[3] - b[1], 1), maxK);
+    k = Math.max(k, 0.08);
+    moveTo({ k: k, x: s.w / 2 - k * (b[0] + b[2]) / 2, y: s.h / 2 - k * (b[1] + b[3]) / 2 }, animate);
+  }
+  function fitAll(animate) {
+    var ids = G.nodes.filter(function (n) { return visible(n.id); }).map(function (n) { return n.id; });
+    fitBox(ids.length ? boxOf(ids) : GEO.bounds, 1.2, animate);
+  }
+  function centerOn(id) {
+    var s = size(), p = GEO.nodes[id], k = Math.min(Math.max(cam.k, 0.9), 1.6);
+    moveTo({ k: k, x: s.w / 2 - k * (p[0] + NW / 2), y: s.h / 2 - k * (p[1] + NH / 2) }, true);
+  }
+  function zoomBy(factor) {
+    var s = size(), k = Math.min(3, Math.max(0.08, cam.k * factor));
+    moveTo({ k: k, x: s.w / 2 - (s.w / 2 - cam.x) * k / cam.k, y: s.h / 2 - (s.h / 2 - cam.y) * k / cam.k }, true);
+  }
+
+  // --- the state ---
+  function visible(id) {
+    var n = nodes[id];
+    if (state.hideGroup[n.group]) return false;
+    return n.diagrams.some(function (d) { return !state.hideDiagram[d]; });
+  }
+  function matches(n) {
+    if (!state.query) return false;
+    return (n.label + "\n" + n.caption + "\n" + n.summary).toLowerCase().indexOf(state.query.toLowerCase()) !== -1;
+  }
+  function focus() {
+    var f = { nodes: Object.create(null), edges: Object.create(null), mode: "" };
+    if (state.path) {
+      f.mode = "path";
+      state.path.nodes.forEach(function (id) { f.nodes[id] = true; });
+      state.path.steps.forEach(function (s) { f.edges[s.edge.id] = true; });
+    } else if (state.selected) {
+      f.mode = "select";
+      f.nodes[state.selected] = true;
+      outEdges[state.selected].concat(inEdges[state.selected]).forEach(function (e) {
+        var other = e.from === state.selected ? e.to : e.from;
+        if (visible(other)) { f.nodes[other] = true; f.edges[e.id] = true; }
+      });
+    } else if (state.tour) {
+      f.mode = "tour";
+      tours[state.tour].steps[state.step].nodes.forEach(function (id) { f.nodes[id] = true; });
+      G.edges.forEach(function (e) { if (f.nodes[e.from] && f.nodes[e.to]) f.edges[e.id] = true; });
+    } else if (state.query) {
+      f.mode = "search";
+      G.nodes.forEach(function (n) { if (matches(n)) f.nodes[n.id] = true; });
+    } else {
+      return null;
+    }
+    return f;
+  }
+  function update() {
+    var f = focus();
+    svg.classList.toggle("focus", !!f);
+    G.nodes.forEach(function (n) {
+      var el = nodeEl[n.id];
+      el.classList.toggle("hidden", !visible(n.id));
+      el.classList.toggle("on", !!(f && f.nodes[n.id]));
+      el.classList.toggle("sel", state.selected === n.id);
+      el.classList.toggle("onpath", !!(f && f.mode === "path" && f.nodes[n.id]));
+      el.classList.toggle("match", !!(f && f.mode === "search" && f.nodes[n.id]));
+    });
+    G.edges.forEach(function (e) {
+      var show = visible(e.from) && visible(e.to), on = show && !!(f && f.edges[e.id]);
+      edgeEl[e.id].classList.toggle("hidden", !show);
+      edgeEl[e.id].classList.toggle("on", on);
+      edgeEl[e.id].classList.toggle("onpath", on && f.mode === "path");
+      labelEl[e.id].classList.toggle("on", on);
+    });
+    frameEl.forEach(function (fr) { fr.el.classList.toggle("hidden", !fr.members.some(function (id) { return visible(id); })); });
+    renderResults();
+    renderPath();
+    renderTour();
+    renderDetail();
+  }
+  function resetFilters() {
+    state.hideDiagram = {};
+    state.hideGroup = {};
+    Array.prototype.forEach.call(document.querySelectorAll(".side input[type=checkbox]"), function (box) { box.checked = true; });
+  }
+  function select(id, center) {
+    if (id && !visible(id)) resetFilters();
+    state.selected = id;
+    update();
+    if (id && center) centerOn(id);
+  }
+
+  // --- the tours ---
+  function showStep() {
+    var nodesOfStep = tours[state.tour].steps[state.step].nodes;
+    if (!nodesOfStep.every(function (id) { return visible(id); })) resetFilters();
+    update();
+    fitBox(boxOf(nodesOfStep), 1.25, true);
+  }
+  function startTour(id) {
+    state.tour = id || null;
+    state.step = 0;
+    state.selected = null;
+    state.path = null;
+    if (state.tour) showStep(); else update();
+  }
+  function stepTour(delta) {
+    if (!state.tour) return;
+    var next = state.step + delta;
+    if (next < 0 || next >= tours[state.tour].steps.length) return;
+    state.step = next;
+    state.selected = null;
+    state.path = null;
+    showStep();
+  }
+  function renderTour() {
+    var t = state.tour ? tours[state.tour] : null;
+    byId("tour-select").value = state.tour || "";
+    byId("tour-prev").disabled = !t || state.step === 0;
+    byId("tour-next").disabled = !t || state.step === t.steps.length - 1;
+    byId("tour-count").textContent = t ? "Step " + (state.step + 1) + " of " + t.steps.length : "";
+    byId("tour-text").textContent = t ? t.steps[state.step].text :
+      "Select a tour. It steps through one diagram, with a text for each step.";
+  }
+
+  // --- the path finder ---
+  function search(from, to, directed) {
+    var prev = Object.create(null), queue = [from], head = 0;
+    prev[from] = null;
+    while (head < queue.length) {
+      var current = queue[head++];
+      if (current === to) break;
+      var next = outEdges[current].map(function (e) { return { edge: e, node: e.to, forward: true }; });
+      if (!directed) next = next.concat(inEdges[current].map(function (e) { return { edge: e, node: e.from, forward: false }; }));
+      next.forEach(function (s) {
+        if (!(s.node in prev) && visible(s.node)) {
+          prev[s.node] = { from: current, edge: s.edge, forward: s.forward };
+          queue.push(s.node);
+        }
+      });
+    }
+    if (!(to in prev)) return null;
+    var list = [], at = to;
+    while (prev[at]) {
+      list.unshift({ from: prev[at].from, to: at, edge: prev[at].edge, forward: prev[at].forward });
+      at = prev[at].from;
+    }
+    return { nodes: [from].concat(list.map(function (s) { return s.to; })), steps: list, directed: directed };
+  }
+  function findPath() {
+    var from = byId("path-from").value, to = byId("path-to").value, note = byId("path-note");
+    state.path = null;
+    if (!from || !to || from === to) {
+      note.textContent = "Select two different parts.";
+      update();
+      return;
+    }
+    if (!visible(from) || !visible(to)) resetFilters();
+    var found = search(from, to, true) || search(from, to, false);
+    if (!found) {
+      note.textContent = "No path connects these parts.";
+      update();
+      return;
+    }
+    state.path = found;
+    state.selected = null;
+    note.textContent = found.directed ?
+      "The shortest path along the arrows has " + steps(found.steps.length) + "." :
+      "No path follows the arrows. The shortest path against some arrows has " + steps(found.steps.length) + ".";
+    update();
+    fitBox(boxOf(found.nodes), 1.2, true);
+  }
+  function clearPath() {
+    state.path = null;
+    byId("path-note").textContent = "";
+    byId("path-from").value = "";
+    byId("path-to").value = "";
+    update();
+  }
+  function nodeLink(parent, id) {
+    var b = tag("button", "link", parent, nodes[id].label);
+    b.type = "button";
+    b.addEventListener("click", function () { select(id, true); });
+    return b;
+  }
+  function renderPath() {
+    var list = byId("path-steps");
+    list.textContent = "";
+    if (!state.path) return;
+    state.path.steps.forEach(function (s) {
+      var li = tag("li", "", list);
+      nodeLink(li, s.from);
+      tag("span", "", li, s.forward ? " \u2192 " : " \u2190 ");
+      nodeLink(li, s.to);
+      tag("div", "muted small", li, s.edge.label + " / " + kinds[s.edge.kind].label);
+    });
+  }
+
+  // --- the panels ---
+  function renderResults() {
+    var list = byId("results");
+    list.textContent = "";
+    if (!state.query) return;
+    var found = G.nodes.filter(function (n) { return visible(n.id) && matches(n); });
+    if (!found.length) { tag("li", "muted small", list, "No part matches."); return; }
+    found.forEach(function (n) {
+      var b = tag("button", "result", tag("li", "", list));
+      b.type = "button";
+      tag("span", "swatch g-" + n.group, b);
+      tag("span", "", b, n.label);
+      b.addEventListener("click", function () { select(n.id, true); });
+    });
+  }
+  function heading(panel, text) { tag("h3", "", panel, text); }
+  function renderDetail() {
+    var panel = byId("detail");
+    panel.textContent = "";
+    if (state.selected) nodeDetail(panel, nodes[state.selected]);
+    else if (state.tour) diagramDetail(panel, diagrams[tours[state.tour].diagram]);
+    else overview(panel);
+  }
+  function nodeDetail(panel, n) {
+    tag("p", "eyebrow", panel, "Selected part");
+    tag("h2", "", panel, n.label);
+    var chips = tag("div", "chips", panel);
+    var chip = tag("span", "chip", chips);
+    tag("span", "swatch g-" + n.group, chip);
+    tag("span", "", chip, groups[n.group].label);
+    tag("span", "chip status-" + n.status, chips, statuses[n.status].label);
+    n.diagrams.forEach(function (d) { tag("span", "chip", chips, diagramName(d)); });
+    tag("p", "summary", panel, n.summary);
+    heading(panel, "On the diagram cards");
+    var cards = tag("dl", "cards", panel);
+    n.diagrams.forEach(function (d) {
+      tag("dt", "", cards, diagramName(d));
+      var dd = tag("dd", "", cards);
+      n.cards[d].forEach(function (line) { tag("span", "", dd, line); });
+    });
+    heading(panel, "Frames");
+    var frames = tag("ul", "plain", panel);
+    G.frames.forEach(function (f) { if (f.nodes.indexOf(n.id) !== -1) tag("li", "", frames, diagramName(f.diagram) + " / " + f.label); });
+    edgeList(panel, "Edges out", outEdges[n.id], true);
+    edgeList(panel, "Edges in", inEdges[n.id], false);
+    heading(panel, "Sources");
+    var sources = tag("ul", "plain mono", panel);
+    n.sources.forEach(function (p) { tag("li", "", sources, p); });
+  }
+  function edgeList(panel, title, list, out) {
+    heading(panel, title + " (" + list.length + ")");
+    if (!list.length) { tag("p", "muted small", panel, "None."); return; }
+    var ul = tag("ul", "edges", panel);
+    list.forEach(function (e) {
+      var li = tag("li", "", ul);
+      tag("span", "kind-dot k-" + e.kind, li);
+      nodeLink(li, out ? e.to : e.from);
+      tag("span", "edge-meta", li, e.label + " / " + kinds[e.kind].label + (e.status === "option" ? " / option" : ""));
+    });
+  }
+  function diagramDetail(panel, d) {
+    tag("p", "eyebrow", panel, "Tour");
+    tag("h2", "", panel, diagramName(d.id));
+    tag("p", "summary", panel, d.subtitle);
+    heading(panel, "Notes of the diagram");
+    var notes = tag("ul", "notes", panel);
+    d.notes.forEach(function (text) { tag("li", "", notes, text); });
+    tag("p", "muted small", panel, "Source: " + d.source);
+  }
+  function overview(panel) {
+    tag("p", "eyebrow", panel, "Overview");
+    tag("h2", "", panel, G.meta.title);
+    tag("p", "summary", panel, G.meta.subtitle + " " + G.meta.snapshot);
+    tag("p", "muted small", panel, G.meta.note);
+    tag("p", "muted small", panel, G.nodes.length + " parts, " + G.edges.length + " edges, " + G.tours.length + " tours.");
+    heading(panel, "How to use the page");
+    var help = tag("ul", "notes", panel);
+    ["Drag the canvas to pan it. Use the mouse wheel to zoom.",
+     "Select a part to read its summary and its edges.",
+     "Select a tour. Then use the arrow keys or Next and Previous.",
+     "The path finder shows the shortest path between two parts.",
+     "Escape clears the selection."].forEach(function (text) { tag("li", "", help, text); });
+    heading(panel, "The diagrams");
+    G.diagrams.forEach(function (d) {
+      var box = tag("details", "diagram", panel);
+      tag("summary", "", box, diagramName(d.id));
+      tag("p", "small", box, d.subtitle);
+      var notes = tag("ul", "notes small", box);
+      d.notes.forEach(function (text) { tag("li", "", notes, text); });
+      var start = tag("button", "link small", box, "Start the tour");
+      start.type = "button";
+      start.addEventListener("click", function () { startTour(d.id); });
+    });
+    heading(panel, "Sources");
+    var sources = tag("ul", "plain mono", panel);
+    G.meta.sources.forEach(function (p) { tag("li", "", sources, p); });
+  }
+
+  function buildControls() {
+    var diagramBox = byId("filter-diagrams");
+    G.diagrams.forEach(function (d) {
+      var label = tag("label", "check", diagramBox);
+      var box = tag("input", "", label);
+      box.type = "checkbox";
+      box.checked = true;
+      box.addEventListener("change", function () { state.hideDiagram[d.id] = !box.checked; update(); });
+      tag("span", "num", label, d.number);
+      tag("span", "", label, d.title);
+    });
+    var groupBox = byId("filter-groups");
+    G.groups.forEach(function (g) {
+      var label = tag("label", "check", groupBox);
+      var box = tag("input", "", label);
+      box.type = "checkbox";
+      box.checked = true;
+      box.addEventListener("change", function () { state.hideGroup[g.id] = !box.checked; update(); });
+      tag("span", "swatch g-" + g.id, label);
+      tag("span", "", label, g.colour + ": " + g.label);
+    });
+    byId("filter-reset").addEventListener("click", function () { resetFilters(); update(); fitAll(true); });
+    var legend = byId("legend");
+    G.statuses.forEach(function (s) {
+      var row = tag("div", "legend-row", legend);
+      tag("span", "border-sample " + s.border, row);
+      tag("span", "", row, s.label + ". " + s.meaning);
+    });
+    G.edgeKinds.forEach(function (k) {
+      var row = tag("div", "legend-row", legend);
+      var sample = make("svg", { "class": "line-sample", width: 30, height: 12, viewBox: "0 0 30 12", "aria-hidden": "true" }, row);
+      make("line", { "class": "k-" + k.id, x1: 1, y1: 6, x2: 25, y2: 6 }, sample);
+      tag("span", "", row, k.label + ". " + k.meaning);
+    });
+    var row = tag("div", "legend-row", legend);
+    var sample = make("svg", { "class": "line-sample", width: 30, height: 12, viewBox: "0 0 30 12", "aria-hidden": "true" }, row);
+    make("line", { "class": "option", x1: 1, y1: 6, x2: 29, y2: 6 }, sample);
+    tag("span", "", row, "A dashed line is an edge of an option.");
+
+    var sorted = G.nodes.slice().sort(function (a, b) { return a.label.localeCompare(b.label) || (a.id < b.id ? -1 : 1); });
+    ["path-from", "path-to"].forEach(function (id) {
+      var choice = byId(id);
+      tag("option", "", choice, "Select a part").value = "";
+      sorted.forEach(function (n) { tag("option", "", choice, n.label).value = n.id; });
+      choice.addEventListener("change", function () { if (byId("path-from").value && byId("path-to").value) findPath(); });
+    });
+    byId("path-find").addEventListener("click", findPath);
+    byId("path-clear").addEventListener("click", clearPath);
+
+    var tourChoice = byId("tour-select");
+    tag("option", "", tourChoice, "Select a tour").value = "";
+    G.tours.forEach(function (t) { tag("option", "", tourChoice, t.label).value = t.id; });
+    tourChoice.addEventListener("change", function () { startTour(tourChoice.value); svg.focus(); });
+    byId("tour-prev").addEventListener("click", function () { stepTour(-1); });
+    byId("tour-next").addEventListener("click", function () { stepTour(1); });
+
+    var field = byId("search");
+    field.addEventListener("input", function () { state.query = field.value.trim(); update(); });
+    field.addEventListener("keydown", function (ev) {
+      if (ev.key !== "Enter") return;
+      var first = G.nodes.filter(function (n) { return visible(n.id) && matches(n); })[0];
+      if (first) select(first.id, true);
+    });
+    byId("zoom-in").addEventListener("click", function () { zoomBy(1.25); });
+    byId("zoom-out").addEventListener("click", function () { zoomBy(0.8); });
+    byId("zoom-fit").addEventListener("click", function () { fitAll(true); });
+    byId("side-toggle").addEventListener("click", function () { setDrawer(!document.body.classList.contains("drawer-open"), true); });
+    narrow.addEventListener("change", function () { setDrawer(document.body.classList.contains("drawer-open"), false); });
+  }
+
+  // --- the drawer ---
+  // On a narrow screen, the sidebar is a drawer over the canvas, so the canvas keeps its width.
+  // While the drawer covers them, the canvas, the tour bar and the right panel take no focus.
+  var narrow = window.matchMedia("(max-width: 900px)");
+  function drawerShown() { return narrow.matches && document.body.classList.contains("drawer-open"); }
+  function setDrawer(open, moveFocus) {
+    var toggle = byId("side-toggle");
+    document.body.classList.toggle("drawer-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    var covered = drawerShown();
+    [byId("stage"), document.querySelector(".tour"), byId("detail")].forEach(function (el) {
+      el.toggleAttribute("inert", covered);
+      if (covered) el.setAttribute("aria-hidden", "true"); else el.removeAttribute("aria-hidden");
+    });
+    if (moveFocus) (open ? byId("side").querySelector("input, select, button") : toggle).focus();
+  }
+
+  // --- the input ---
+  function nodeOf(target) {
+    var el = target && target.closest ? target.closest(".node") : null;
+    return el ? el.getAttribute("data-id") : null;
+  }
+  function moveTip(ev) {
+    if (tip.hidden) return;
+    var r = byId("stage").getBoundingClientRect();
+    tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 220) + "px";
+    tip.style.top = (ev.clientY - r.top + 16) + "px";
+  }
+  function bindInput() {
+    svg.addEventListener("pointerdown", function (ev) {
+      if (ev.button !== 0) return;
+      stop();
+      drag = { x: ev.clientX, y: ev.clientY, cx: cam.x, cy: cam.y, node: nodeOf(ev.target), moved: false, id: ev.pointerId };
+    });
+    window.addEventListener("pointermove", function (ev) {
+      if (drag) {
+        var dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+        if (!drag.moved && Math.abs(dx) + Math.abs(dy) > 4) {
+          drag.moved = true;
+          tip.hidden = true;
+          svg.classList.add("panning");
+        }
+        if (drag.moved) { cam = { x: drag.cx + dx, y: drag.cy + dy, k: cam.k }; apply(); }
+      }
+      moveTip(ev);
+    });
+    window.addEventListener("pointerup", function (ev) {
+      if (!drag) return;
+      var d = drag;
+      drag = null;
+      svg.classList.remove("panning");
+      if (d.moved) return;
+      if (d.node) select(d.node, false);
+      else if (svg.contains(ev.target) && state.selected) select(null, false);
+    });
+    svg.addEventListener("wheel", function (ev) {
+      ev.preventDefault();
+      stop();
+      var s = size(), px = ev.clientX - s.left, py = ev.clientY - s.top;
+      var dy = ev.deltaMode === 1 ? ev.deltaY * 16 : ev.deltaY;
+      var k = Math.min(3, Math.max(0.08, cam.k * Math.exp(-dy * 0.0016)));
+      cam = { x: px - (px - cam.x) * k / cam.k, y: py - (py - cam.y) * k / cam.k, k: k };
+      apply();
+    }, { passive: false });
+    svg.addEventListener("pointerover", function (ev) {
+      var id = nodeOf(ev.target);
+      if (!id || drag) return;
+      var n = nodes[id];
+      tip.textContent = "";
+      tag("strong", "", tip, n.label);
+      tag("span", "", tip, groups[n.group].label + " / " + statuses[n.status].label);
+      tip.hidden = false;
+      moveTip(ev);
+    });
+    svg.addEventListener("pointerout", function (ev) {
+      var id = nodeOf(ev.target);
+      if (id && nodeOf(ev.relatedTarget) !== id) tip.hidden = true;
+    });
+    svg.addEventListener("keydown", function (ev) {
+      var id = nodeOf(ev.target);
+      if (id && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); select(id, true); }
+    });
+    document.addEventListener("keydown", function (ev) {
+      var t = ev.target, field = t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName);
+      if (ev.key === "Escape") {
+        if (drawerShown()) { ev.preventDefault(); setDrawer(false, true); return; }
+        if (state.selected) state.selected = null;
+        else if (state.path) { clearPath(); return; }
+        else if (state.tour) state.tour = null;
+        else if (state.query) { state.query = ""; byId("search").value = ""; }
+        update();
+        return;
+      }
+      if (field || !state.tour) return;
+      if (ev.key === "ArrowRight" || ev.key === "ArrowDown") { ev.preventDefault(); stepTour(1); }
+      else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") { ev.preventDefault(); stepTour(-1); }
+    });
+  }
+
+  draw();
+  buildControls();
+  bindInput();
+  update();
+  fitAll(false);
+  document.documentElement.setAttribute("data-ready", "true");
+})();
+</script>
+</body>
+</html>

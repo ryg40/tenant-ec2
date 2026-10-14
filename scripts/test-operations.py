@@ -80,7 +80,7 @@ class OperationsTests(unittest.TestCase):
 
     def test_host_boundary_changes_only_add_s3(self):
         current = statements(self.provisioner["Resources"]["Boundary"]["Properties"]["PolicyDocument"])
-        expected = {"ProjectBucketList", "ProjectBucketObjects"}
+        expected = {"ProjectBucketList", "ProjectBucketObjects", "GeneratedSecretWrite"}
         original = self.provisioner["Resources"]["Boundary"]["Properties"]["PolicyDocument"].copy()
         original["Statement"] = [item for item in original["Statement"] if item["Sid"] not in expected]
         digest = hashlib.sha256(json.dumps(original, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -90,8 +90,12 @@ class OperationsTests(unittest.TestCase):
         self.assertEqual(current["ProjectBucketList"]["Resource"], {"Sub": "arn:${AWS::Partition}:s3:::${Project}-*"})
         self.assertEqual(actions(current["ProjectBucketObjects"]), {"s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"})
         self.assertEqual(current["ProjectBucketObjects"]["Resource"], {"Sub": "arn:${AWS::Partition}:s3:::${Project}-*/*"})
-        for name in expected:
+        for name in expected - {"GeneratedSecretWrite"}:
             self.assertEqual(current[name]["Condition"]["StringEquals"]["s3:ResourceAccount"], {"Ref": "AWS::AccountId"})
+        generated = current["GeneratedSecretWrite"]
+        self.assertEqual(actions(generated), {"secretsmanager:PutSecretValue"})
+        self.assertEqual(generated["Resource"], {"Sub": "arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:${Project}/generated-??????"})
+        self.assertEqual(generated["Condition"]["StringEquals"]["aws:RequestedRegion"], {"Ref": "Regions"})
         self.assertFalse(any(action in {"ec2:CreateSnapshot", "ec2:DeleteSnapshot", "ec2:CreateTags"} or action.startswith("events:") for item in current.values() for action in actions(item)))
 
     def test_snapshot_role_limits(self):

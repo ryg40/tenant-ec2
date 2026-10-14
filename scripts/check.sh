@@ -257,10 +257,12 @@
 #                           commands pass when a service that the bootstrap
 #                           starts does not run.
 #  10. self-tests         the self-test of each script that has one, with its
-#                         own fixtures and stubs. Seven lines:
+#                         own fixtures and stubs. Ten lines:
 #                         selftest   scripts/aws-provisioner.sh,
-#                                    scripts/entra-app.sh and
-#                                    scripts/build-diagrams.py
+#                                    scripts/entra-app.sh,
+#                                    scripts/build-diagrams.py,
+#                                    scripts/dns-migration.py and
+#                                    scripts/build-architecture-html.py
 #                         selftest   scripts/security-review.sh --self-test. The
 #                                    script always exits with 0, so the test is
 #                                    the line that it prints. The review itself
@@ -278,6 +280,12 @@
 #                                    registry, so CHECK_OFFLINE=1 gives a skip.
 #                                    Skip without the Python module playwright
 #                                    with Chromium, or without npm.
+#                         architecture
+#                                    scripts/build-architecture-html.py --check:
+#                                    docs/architecture.html is the build of
+#                                    docs/diagrams/architecture-graph.json. Needs
+#                                    python3 only; no network call and no skip
+#                                    for CHECK_OFFLINE=1.
 #                         local run  ok-auth/local-run.sh --upstream stub: the
 #                                    gate starts in a Compose project of its
 #                                    own, with a stub in place of Entra ID. The
@@ -426,12 +434,15 @@ this script:
                      the necessary names and on the services, with and with
                      no pin of the agent kit
   selftest           the self-test of scripts/aws-provisioner.sh, of
-                     scripts/entra-app.sh, of scripts/security-review.sh and of
-                     scripts/build-diagrams.py
+                     scripts/entra-app.sh, of scripts/security-review.sh, of
+                     scripts/build-diagrams.py, of scripts/dns-migration.py and
+                     of scripts/build-architecture-html.py
   loaders            the loader tests of the security review skill; skip
                      without Claude Code, Node.js or the Pi package
   scenes             Excalidraw loads each scene of docs/diagrams/; skip with
                      CHECK_OFFLINE=1 and without Playwright or npm
+  architecture       docs/architecture.html is the build of its graph source;
+                     python3 only, no network call
   local run          the local run of the gate with a stub in place of Entra ID;
                      skip with CHECK_NO_LOCAL_RUN=1
   operations         offline operations, IAM and journal-export regressions
@@ -2005,6 +2016,8 @@ secret_check() {
     printf 'create-secret\nput-secret-value\n' >"$dry/expected"
     cmp -s "$dry/expected" "$zone/ops" ||
         echo "check: two runs of secret do not make the secret and then write a new version" >>"$dry/problems"
+    python3 -I scripts/test-generated-keys.py "$dry" "$top" >"$dry/generated.out" 2>"$dry/generated.err" ||
+        echo "check: generated-key regression fails; inspect the private check output" >>"$dry/problems"
     for zone in "$dry"/secret-*; do
         [ ! -s "$zone/problems" ] || cat "$zone/problems" >>"$dry/problems"
     done
@@ -2508,6 +2521,17 @@ def aws():
             print("ElasticIp\t%s\nInstanceId\ti-0c4ec4f1x7e000000" % state["address"])
         else:
             print("CREATE_COMPLETE")
+    elif call == "secretsmanager get-secret-value":
+        generated = options["--secret-id"].endswith("/generated")
+        path = os.path.join(home, "generated.json" if generated else "secret.json")
+        if state.get("read_fail"):
+            sys.stderr.write("AccessDenied: " + " ".join(state["fakes"]))
+            finish(254)
+        if not os.path.exists(path):
+            sys.stderr.write("ResourceNotFoundException\n")
+            finish(254)
+        with open(path, encoding="utf-8") as handle:
+            print(handle.read())
     elif call == "secretsmanager describe-secret":
         if not state.get("secret"):
             sys.stderr.write("An error occurred (ResourceNotFoundException) when calling the "
@@ -2520,8 +2544,13 @@ def aws():
             problem("the secret is not a file of the call")
             finish(2)
         private(path[7:], "the file of the secret")
+        generated = options.get("--secret-id", "").endswith("/generated")
+        if generated and state.get("put_fail"):
+            sys.stderr.write("AccessDenied: " + " ".join(state["fakes"]))
+            print(" ".join(state["fakes"]))
+            finish(254)
         with open(path[7:], encoding="utf-8") as source:
-            with open(os.path.join(home, "secret.json"), "w", encoding="utf-8") as target:
+            with open(os.path.join(home, "generated.json" if generated else "secret.json"), "w", encoding="utf-8") as target:
                 target.write(source.read())
         state["secret"] = True
         add("ops", words[1])
@@ -3787,7 +3816,13 @@ fi
 loaders_check
 script_selftest "selftest scripts/build-diagrams.py" scripts/build-diagrams.py \
     python3 -I scripts/build-diagrams.py --self-test
+script_selftest "selftest scripts/dns-migration.py" scripts/dns-migration.py \
+    python3 -I scripts/dns-migration.py --self-test
+script_selftest "selftest scripts/build-architecture-html.py" scripts/build-architecture-html.py \
+    python3 -I scripts/build-architecture-html.py --selftest
 scenes_check
+script_selftest "architecture docs/architecture.html" scripts/build-architecture-html.py \
+    python3 -I scripts/build-architecture-html.py --check
 local_run_check
 
 # --- operations regression checks -------------------------------------------

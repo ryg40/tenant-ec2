@@ -9,6 +9,8 @@ It needs no home lab, Copilot account or DNS provider key.
 
 ![The core AWS components](docs/diagrams/01-aws-core.svg)
 
+Open the [interactive architecture page](docs/architecture.html) for all five diagrams as one graph, with search, tours and a path finder.
+
 Read the [architecture](docs/architecture.md) for the service networks, the login path and the install flow.
 
 ## The core
@@ -64,8 +66,10 @@ Not verified: a private agent-kit clone or a complete install with the agent on 
 | [Options](docs/options/README.md) | The switches and the option pages. |
 | [Host template](docs/reference/host-template.md) | The AWS components, parameters and storage rules. |
 | [Compose stack](docs/reference/compose-stack.md) | The services, file sets, networks and model routes. |
-| [Host boot](docs/reference/host-boot.md) | The user data, bootstrap, generated keys and repeat runs. |
+| [Host boot](docs/reference/host-boot.md) | The user data, bootstrap, generated keys and repeat runs; [move to a later snapshot](docs/reference/host-snapshot-move.md). |
 | [Deploy script](docs/reference/deploy-script.md) | Commands, update guards and known limits. |
+| [DNS migration](docs/reference/dns-migration.md) | The move of the DNS zone of a domain to Porkbun, with each record, before the Pangolin certificate. |
+| [Host domain move](docs/reference/host-domain-move.md) | The move of the running host under a new domain subtree, with each check and each way back. |
 | [Checks](docs/reference/checks.md) | Source checks, dry runs, local gate tests, diagrams and hook behavior. |
 | [Credentials](docs/credentials.md) | The names, stores and provisioner procedure. |
 | [Security review](docs/security-review.md) | The advisory review and the public risk list. |

@@ -26,7 +26,8 @@
 #       Read the environment file on stdin and write it to the Secrets Manager secret
 #       <project>/env as one JSON object with the names as keys:
 #         scripts/aws-host.sh secret < .env
-#       The command reads stdin only. These names need a value that is not a placeholder:
+#       Empty generated names take their values from <project>/generated when it exists.
+#       The command reads the private file on stdin. These names need a non-placeholder value:
 #       - each name of Part 1 of .env.example;
 #       - each name with an empty value in the block `Option <name>` of .env.example, when
 #         EC2_OPTIONS of the input holds <name>;
@@ -46,6 +47,9 @@
 #       secret: a DNS credential stays on the development machine. The one exception is
 #       the Porkbun pair with the option pangolin: the Pangolin edge needs it on the host
 #       for its certificate. The command prints each name that it leaves out.
+#   generated-status
+#       Read <project>/generated and print the three names with present or absent.
+#       Print no value. An unavailable secret read fails with a name-only warning.
 #   dns [--plan]
 #       Set the DNS records of the host with scripts/dns-records.sh: one A record to the
 #       Elastic IP for each name of EC2_EDGE_NAMES below EC2_DOMAIN, and for the name
@@ -218,6 +222,11 @@ import sys
 
 LINE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)")
 SECRET_MAX = 65536
+MADE = (
+    "EC2_OPENVIKING_LITELLM_API_KEY",
+    "EC2_PI_DURABLE_LITELLM_API_KEY",
+    "EC2_PI_DURABLE_OPENVIKING_API_KEY",
+)
 # The known names of the three option settings. The order of a tuple is the order of each
 # result: the DNS records and the checks of `verify` use it.
 OPTIONS = ("pangolin", "copilot")
@@ -455,6 +464,29 @@ def secret(sample_path, out, allow, repo):
         if result.returncode:
             message = result.stderr.strip().removeprefix("host-bootstrap: error: ")
             stop(message or "the environment form test failed")
+    # Forms must pass before a read. A dry run makes no AWS call.
+    if (out != "-" and not fake and not refused and not any(n not in MADE for n in empty)
+            and any(not found.get(n) for n in MADE)):
+        import subprocess
+        project = found.get("EC2_PROJECT") or os.environ.get("EC2_PROJECT") or "tenant-ec2"
+        profile = found.get("EC2_AWS_PROFILE") or os.environ.get("EC2_AWS_PROFILE") or project
+        region = found.get("EC2_AWS_REGION") or os.environ.get("EC2_AWS_REGION") or "us-east-1"
+        result = subprocess.run(["python3", "-I", os.path.join(repo, "scripts/generated-keys.py"),
+            "read", "--project", project, "--region", region, "--profile", profile],
+            capture_output=True, text=True)
+        if result.returncode:
+            stop("cannot read the generated secret; no environment secret is written")
+        generated = json.loads(result.stdout)
+        for name in MADE:
+            if not found.get(name) and generated.get(name):
+                found[name] = written[name] = generated[name]
+        empty = [n for n in need if not found.get(n) and n not in allowed]
+        problems = [p for p in problems if not p.startswith("no value for ")]
+        if empty:
+            problems.append("no value for " + " ".join(empty))
+        body = json.dumps(written, separators=(",", ":"))
+        if len(body.encode("utf-8")) > SECRET_MAX:
+            problems.append("the secret is larger than %d bytes" % SECRET_MAX)
     if not problems and out != "-":
         write_file(out, body)
     for name in ("EC2_PROJECT", "EC2_AWS_PROFILE", "EC2_AWS_REGION"):
@@ -890,7 +922,7 @@ while [ $# -gt 0 ]; do
 done
 
 case $command in
-    deploy | outputs | secret | dns | verify) ;;
+    deploy | outputs | secret | generated-status | dns | verify) ;;
     *) usage >&2; exit 2 ;;
 esac
 [ "$replace" = 0 ] || [ "$command" = deploy ] || die "--replace-instance is an option of deploy"
@@ -1196,11 +1228,30 @@ case $command in
         fi
         sh "$dns_records" --env-file "$env_file" "$@" >&3
         ;;
+    generated-status)
+        if [ "$dry" = 1 ]; then
+            note "read $project/generated; print each generated name with present or absent, never a value"
+        else
+            python3 -I "$here/generated-keys.py" status --project "$project" --region "$region" --profile "$profile"
+        fi
+        ;;
     verify)
         # Validate before AWS or SSM; the project becomes a shell path on the host.
         case $project in
             '' | *[!A-Za-z0-9_-]*) die "EC2_PROJECT is not a safe host directory name" ;;
         esac
+        if [ "$dry" = 1 ]; then
+            note "compare the three required generated names with $project/generated; never compare or print values"
+        else
+            generated_status=0
+            python3 -I "$here/generated-keys.py" status --require \
+                --project "$project" --region "$region" --profile "$profile" || generated_status=$?
+            case $generated_status in
+                0) echo "ok - generated secret: all required names are present" ;;
+                3) echo "skip - generated secret: not in this deployment; apply the host stack update first" ;;
+                *) die "verify: the generated secret lacks a required name or cannot be read" ;;
+            esac
+        fi
         stack_status
         [ -n "$status" ] || die "no stack has the name $stack"
         echo "stack $stack: $status"

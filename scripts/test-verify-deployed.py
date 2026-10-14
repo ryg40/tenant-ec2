@@ -815,6 +815,20 @@ elif 'get-command-invocation' in args:
     print({'Status': os.environ.get('STUB_STATE', 'Success'),
            'StandardOutputContent': 'fixture internal health evidence',
            'StandardErrorContent': ''}[query])
+elif 'get-secret-value' in args:
+    names = ('EC2_OPENVIKING_LITELLM_API_KEY', 'EC2_PI_DURABLE_LITELLM_API_KEY',
+             'EC2_PI_DURABLE_OPENVIKING_API_KEY')
+    outcome = os.environ.get('STUB_GENERATED', 'present')
+    if outcome in ('missing', 'read-failure'):
+        error = 'ResourceNotFoundException' if outcome == 'missing' else 'AccessDeniedException'
+        print(error + ': fixture-private-value', file=sys.stderr)
+        raise SystemExit(254)
+    data = dict.fromkeys(names, 'fixture-private-value')
+    if outcome == 'partial':
+        del data[names[0]]
+    elif outcome == 'empty':
+        data = {}
+    print(json.dumps(data))
 elif 'describe-stacks' in args:
     query = args[args.index('--query') + 1]
     print('CREATE_COMPLETE' if query == 'Stacks[0].StackStatus' else 'InstanceId\\ti-fixture')
@@ -838,10 +852,10 @@ class SsmTests(unittest.TestCase):
         self.environ = {"PATH": str(self.work) + os.pathsep + os.environ["PATH"], "HOME": str(self.work),
                         "STUB_LOG": str(self.log), "STUB_SSM": str(self.ssm)}
 
-    def run_host(self, dry=False, trace=False, state="Success"):
+    def run_host(self, dry=False, trace=False, state="Success", generated="present"):
         args = ["sh"] + (["-x"] if trace else []) + [str(ROOT / "scripts/aws-host.sh"),
                 "--env-file", str(self.env)] + (["--dry-run"] if dry else []) + ["verify"]
-        result = subprocess.run(args, env=dict(self.environ, STUB_STATE=state), text=True,
+        result = subprocess.run(args, env=dict(self.environ, STUB_STATE=state, STUB_GENERATED=generated), text=True,
                                 capture_output=True, timeout=10)
         self.assertNotIn("fixture-private-value", result.stdout + result.stderr)
         return result
@@ -850,12 +864,42 @@ class SsmTests(unittest.TestCase):
         result = self.run_host(dry=True, trace=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+        self.assertIn("compare the three required generated names with tenant-ec2/generated; "
+                      "never compare or print values", result.stdout)
         # The environment file names no option: the file set of the core.
         self.assertIn("python3 -I scripts/verify-deployed.py --repo . --file-set " + FILE_SETS[""]
                       + " --edge-names ok || rc=1", result.stdout)
         for text in ("https://", "kits/", "healthz", "smoke.sh", "scripts/verify.py",
                      "pangolin", "gerbil", "traefik", "copilot"):
             self.assertNotIn(text, result.stdout)
+
+    def test_generated_secret_outcomes_continue_or_fail_before_ssm(self):
+        ok = "ok - generated secret: all required names are present"
+        skip = "skip - generated secret: not in this deployment; apply the host stack update first"
+        for outcome in ("present", "missing", "partial", "empty", "read-failure"):
+            with self.subTest(outcome=outcome):
+                self.log.unlink(missing_ok=True)
+                self.ssm.unlink(missing_ok=True)
+                result = self.run_host(generated=outcome, trace=True)
+                continues = outcome in ("present", "missing")
+                self.assertEqual(result.returncode, 0 if continues else 1)
+                self.assertEqual(result.stdout.splitlines().count(ok), int(outcome == "present"))
+                self.assertEqual(result.stdout.splitlines().count(skip), int(outcome == "missing"))
+                self.assertEqual("generated: secret absent" in result.stdout, outcome == "missing")
+                self.assertEqual("verify: pass" in result.stdout, continues)
+                self.assertEqual(self.ssm.exists(), continues)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(sum("get-secret-value" in args for args in calls), 1)
+                self.assertEqual(sum("send-command" in args for args in calls), int(continues))
+                if not continues:
+                    self.assertEqual(len(calls), 1)
+                    self.assertIn("the generated secret lacks a required name or cannot be read", result.stderr)
+                if outcome == "partial":
+                    self.assertIn("EC2_OPENVIKING_LITELLM_API_KEY: absent", result.stdout)
+                    self.assertIn("EC2_PI_DURABLE_LITELLM_API_KEY: present", result.stdout)
+                self.assertNotIn("fixture-private-value", self.log.read_text())
+                if self.ssm.exists():
+                    self.assertNotIn("fixture-private-value", self.ssm.read_text())
 
     def test_one_stub_ssm_command_uses_host_file_and_propagates_failure(self):
         for state in ("Success", "Failed", "TimedOut"):
@@ -875,6 +919,10 @@ class SsmTests(unittest.TestCase):
                         self.assertIn("2>/dev/null", line)
                 calls = [json.loads(line) for line in self.log.read_text().splitlines()]
                 self.assertEqual(sum('send-command' in args for args in calls), 1)
+                self.assertEqual(sum('get-secret-value' in args for args in calls), 1)
+                for name in ('EC2_OPENVIKING_LITELLM_API_KEY', 'EC2_PI_DURABLE_LITELLM_API_KEY',
+                             'EC2_PI_DURABLE_OPENVIKING_API_KEY'):
+                    self.assertIn(name + ': present', result.stdout)
                 self.assertNotIn("fixture-private-value", self.log.read_text() + self.ssm.read_text())
 
     def test_each_value_of_the_options_gives_its_file_set_to_the_verifier(self):

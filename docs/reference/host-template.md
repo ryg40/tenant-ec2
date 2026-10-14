@@ -60,6 +60,23 @@ Warning: retained storage can continue to incur charges after stack deletion.
 
 Warning: a file system from before this identity needs an ownership migration before use. Plan and approve that migration separately.
 
+## Generated keys
+
+The template creates `<Project>/generated` with three empty names for the service keys that bootstrap creates.
+It retains the secret after a successful create, with the same retention policy as the data volume.
+The host role grants `PutSecretValue`, `GetSecretValue` and `DescribeSecret` on `!Ref GeneratedSecret`, the exact secret ARN.
+The `<Project>/env` grant remains read-only and unchanged.
+The host boundary adds only `PutSecretValue` on `<Project>/generated-??????`, in the configured regions and account.
+The six question marks match the Secrets Manager suffix. They do not permit another secret name.
+
+The administrator applies the boundary before the approved host-stack update. No instance or user-data property changes for this feature.
+The role references the secret, so CloudFormation creates the secret before the instance profile and first boot.
+An update does not rerun bootstrap. The approved snapshot move must install and run the new bootstrap.
+See [host boot](host-boot.md#environment-file-and-generated-keys) for recovery, warning behavior and the private read path.
+
+Not verified: the live template and boundary apply, instance retention during that update, or the first write-back on a host.
+The exact change set must prove replacement behavior. Unchanged instance source alone does not prove a live update.
+
 ## Operations
 
 The operations are optional: the daily snapshots, the logs and the billing alarm.

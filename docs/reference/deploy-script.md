@@ -160,10 +160,29 @@ A change set that meets both cases needs both flags.
 
 Warning: `--replace-instance` loses every file on the root volume. The Elastic IP, data volume and file system stay.
 
+A change of the parameter `Domain` alone changes the user data only. It restarts the instance and does not replace it.
+The [domain move procedure](host-domain-move.md) reads the change set before any stop, and it orders the data volume detach for a replacement.
+
 Warning: `--allow-remove` can detach retained storage from the stack. Replacement storage starts empty even when the old storage stays in the account.
 
 Keep `EC2_ENABLE_BUCKET` and `EC2_ENABLE_OPERATIONS` at `false` until the provisioner and boundary have their required rights.
 A deploy with either switch on fails without those rights.
+
+## Snapshot move guard proposals
+
+The [snapshot move procedure](host-snapshot-move.md) uses a checked clone change and a bootstrap repeat first.
+The current deploy script has these gaps for a snapshot move:
+
+- It does not compare changed snapshot parameters with the installed host commit. An update can finish without installing the new snapshot.
+- `--replace-instance` permits replacement; it does not force it. The flag only sets the guard variable at line 865 of `scripts/aws-host.sh`.
+- `deploy_update` creates and executes its own change set. After the guards pass, line 740 executes it without another approval prompt.
+- The guards do not order the old data volume detach before the new attachment. The template uses one `DataVolumeAttachment` for `Instance`.
+
+Proposed separate changes: refuse snapshot-only updates without an explicit host-move plan; separate change-set creation from execution of its reviewed identity.
+A replacement workflow also needs an explicit replacement trigger, attachment ordering and recovery checks.
+These are proposals, not implemented guards. Do not assume that a deploy flag supplies them.
+
+Not verified: a live snapshot update, replacement or recovery under these conditions. A reviewed live procedure must prove each result.
 
 ## Outputs and DNS
 

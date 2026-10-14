@@ -1,6 +1,6 @@
 # The host boot
 
-[Install](../install.md) | [Host template](host-template.md) | [Compose stack](compose-stack.md)
+[Install](../install.md) | [Host template](host-template.md) | [Compose stack](compose-stack.md) | [Move to a later snapshot](host-snapshot-move.md) | [Move under a new domain](host-domain-move.md)
 
 Three scripts bring a new instance to a running Compose stack.
 User data writes stack values, clones the portable snapshot, checks its commit and starts `scripts/host-userdata.sh`.
@@ -102,12 +102,29 @@ The bootstrap creates these three keys:
 | `EC2_PI_DURABLE_LITELLM_API_KEY` | The model route that the agent needs. |
 | `EC2_PI_DURABLE_OPENVIKING_API_KEY` | The agent's OpenViking account, with role `user`. |
 
-The bootstrap never writes to Secrets Manager.
-Copy each generated value to your approved credential store and to the Secrets Manager secret through a secure channel.
-Until then, each bootstrap run preserves its value in the host environment file.
-Bitwarden and Vault are optional stores; see [home lab tools](../options/home-lab.md).
+The stack creates a second secret, `<Project>/generated`, with only these three names.
+The instance role reads and describes this secret. It can write a new version with `secretsmanager:PutSecretValue`.
+It gains no write right on `<Project>/env`.
+The administrator must apply the matching boundary change before the host can write.
 
-Before the first boot, the `secret` command needs `--allow-empty` for each generated key.
+The bootstrap reads the generated secret before the environment secret.
+A nonempty generated value wins. The environment secret is second, and the old host environment file is the fallback.
+A missing or empty generated secret permits first boot. The bootstrap creates the missing keys through the service APIs.
+After key creation, one `put-secret-value` saves all three names. An unchanged repeat writes no new version.
+The helper runs with `python3 -I`. Values use stdin and a temporary mode 0600 file, never arguments.
+A failed put prints a name-only warning, keeps the environment file and continues the bootstrap.
+Repair the secret or its rights before repeating the bootstrap. The host cannot create a missing secret.
+A failed read warns and uses the existing fallback. Review that warning before replacing storage or changing credentials.
+
+On the development machine, `scripts/aws-host.sh generated-status` prints each name with `present` or `absent`.
+`verify` requires all three names without comparing or printing values.
+On an older deployment without the generated secret, `verify` skips this check until the owner applies the host stack update.
+`secret` fills empty generated names from this second secret. It keeps each explicit nonempty private-file value.
+A dry run reads no secret, so it cannot prove that an empty name has a stored value.
+Copy approved external credentials through a private Secrets Manager read, not through Systems Manager command output.
+Bitwarden and Vault remain optional stores; see [home lab tools](../options/home-lab.md).
+
+Before a generated key has a stored value, the `secret` command needs its `--allow-empty` exception.
 With a public snapshot, it also needs the exception for `EC2_SNAPSHOT_CLONE_TOKEN`.
 
 ```sh
@@ -203,7 +220,7 @@ The built image then does not prove the lock's source pin.
 
 ## Manual actions after first boot
 
-1. Preserve the three generated keys with the [credential procedure](../credentials.md). The bootstrap names the values that need preservation.
+1. Check `generated-status` and preserve approved external copies with the [credential procedure](../credentials.md). Never print values through Systems Manager.
 2. Record the built `image_digest` values from the host lock in your controlled lock record. They identify the actual built images.
 3. Complete the [Entra login checks](../entra.md). Only an allowed group member must reach OpenKnowledge.
 
@@ -211,6 +228,10 @@ The [Copilot login](../options/copilot.md) and [Pangolin setup](../options/pango
 A [Newt site](../options/home-lab.md) is also optional.
 
 ## Known limits
+
+- Not verified: the live template and boundary apply, or the first write-back on a host.
+- Not verified: an existing instance receives the new right without replacement. A reviewed change set and approved host check must prove it.
+- An IAM update does not run bootstrap. Write-back runs only after the new bootstrap runs.
 
 - Not verified: a kit build on the host. An Amazon Linux 2023 container test used Docker stubs and cloned the three pinned public kits.
   That test checks their lock commits and build image names, not a real image build.

@@ -15,6 +15,38 @@ A solid component box marks the core, and a dashed component box marks an option
 | Red | Identity or credential |
 | Gray | External client or tool |
 
+## Interactive page
+
+[Open the interactive page](architecture.html) in a browser.
+It shows the five diagrams as one graph with the same colour key.
+The page is one file, and it makes no network request, so it also works from the file system.
+
+- The left sidebar searches the labels and summaries, filters by diagram and by colour, and shows the legend.
+- A click on a part selects it. The right panel shows its summary, its diagrams and its edges.
+- A guided tour steps through each diagram with a text for each step. The arrow keys move through the tour.
+- The path finder shows the shortest path between two parts.
+- Drag the canvas to pan it, and use the mouse wheel to zoom. Escape clears the selection.
+- A part out of focus fades its card but keeps a readable label.
+- On a narrow screen, the Menu button opens and closes the sidebar over the canvas. Escape also closes the open sidebar.
+
+The source of the graph is [architecture-graph.json](diagrams/architecture-graph.json).
+It holds the parts, the edges, the frames and the five tours, with the source files of each part.
+Edit the source, not the page. Then build the page, and check the source and the page:
+
+```sh
+python3 -I scripts/build-architecture-html.py
+python3 -I scripts/build-architecture-html.py --check
+python3 -I scripts/build-architecture-html.py --selftest
+```
+
+The build needs Python 3.10 or later and no other tool, and it makes no network call.
+Two builds of the same source give the same bytes.
+`--check` builds the page in memory and compares it with the committed page.
+Its last line must start with `architecture: ok`.
+The check script runs `--check` and `--selftest` as two of its lines.
+
+- Not verified: the page in a browser other than Chromium.
+
 ## AWS core
 
 ![The core AWS components](diagrams/01-aws-core.svg)

@@ -99,10 +99,9 @@
 #   - each EC2_KIT_SOURCE_<KIT> and EC2_KIT_TOKEN_<KIT> (step 5 asks for the one it needs).
 # A placeholder has the meaning of scripts/aws-host.sh: the function `placeholder` below
 # holds the same list. EC2_PI_DURABLE_THINKING must be xhigh.
-# A name that step 7 made stays in the file of the host when the secret has no value for
-# it. So a second run and a new instance on the same data volume keep the three keys.
-# The owner copies each new value to the secret and to each other store of the
-# credentials. This script never writes to Secrets Manager.
+# The generated secret supplies these three keys first. The environment secret is
+# second, and the old host file is the fallback. Step 7 writes changed keys to
+# <project>/generated only. A failed write warns and keeps the host file.
 # A value must not hold a line break or a single quote, and it must not end with a
 # backslash: the environment file cannot hold such a value. `scripts/aws-host.sh secret`
 # refuses the same values, so the secret holds none.
@@ -504,7 +503,7 @@ def forms(found, repo):
         stop("the edge form test failed; check its files and the required shell tools")
 
 
-def render(sample_path, repo, env_path):
+def render(sample_path, repo, env_path, generated_path=None):
     """stdin: the text of the secret. Write the environment file from it."""
     try:
         data = json.loads(sys.stdin.read())
@@ -523,8 +522,17 @@ def render(sample_path, repo, env_path):
         found[name] = str(value)
     forms(found, repo)
     old = parse(env_path) if os.path.exists(env_path) else {}
+    generated = {}
+    if generated_path:
+        try:
+            with open(generated_path, encoding="utf-8") as handle:
+                generated = json.load(handle)
+        except (OSError, ValueError):
+            stop("cannot read the generated keys file")
     kept = []
     for name in MADE:
+        if generated.get(name):
+            found[name] = generated[name]
         if not found.get(name) and old.get(name):
             found[name] = old[name]
             kept.append(name)
@@ -707,6 +715,9 @@ def blueprint(env_path, rendered):
 command, args = sys.argv[1], sys.argv[2:]
 if command == "render":
     render(*args)
+elif command == "generated":
+    found = parse(args[0])
+    print(json.dumps({name: found.get(name, "") for name in MADE}))
 elif command == "check":
     check(*args)
 elif command == "forms":
@@ -1079,7 +1090,7 @@ edge_settings() {
 environment() {
     say "step 2 of 9: environment file"
     if [ "$dry_run" = 1 ]; then
-        say "would read the secret $secret_id with the instance role and write $env_file (owner root, mode 0600)"
+        say "would read $project/generated first, then $secret_id, and write $env_file (owner root, mode 0600)"
         if [ "$(readlink "$repo/.env" 2>/dev/null || true)" = "$env_file" ]; then
             skip "the link $repo/.env to that file is there"
         else
@@ -1111,12 +1122,19 @@ environment() {
         return 0
     fi
     install -d -m 0700 -o 0 -g 0 "$state"
+    work_dir
+    generated_file=$work/generated.json
+    if ! (umask 077; python3 -I "$repo/scripts/generated-keys.py" read \
+        --project "$project" --region "$region" >"$generated_file"); then
+        printf '{}\n' >"$generated_file"
+        say "Warning: $project/generated is unavailable; the environment file remains the fallback."
+    fi
     # The value of the secret stays in one variable of this shell and goes to the helper
     # through a pipe. `printf` is a part of the shell, so no process list shows it.
     secret=$(aws secretsmanager get-secret-value --region "$region" --secret-id "$secret_id" \
         --query SecretString --output text --no-cli-pager) ||
         die "cannot read the secret $secret_id with the instance role"
-    assign=$(umask 077 && printf '%s' "$secret" | helper render "$sample" "$repo" "$env_file") || exit 1
+    assign=$(umask 077 && printf '%s' "$secret" | helper render "$sample" "$repo" "$env_file" "$generated_file") || exit 1
     secret=
     render_count=0
     render_same=0
@@ -1620,6 +1638,17 @@ openviking_key() {
     say "made the OpenViking user key of the agent and wrote it into $name"
 }
 
+generated_writeback() {
+    if [ "$dry_run" = 1 ]; then
+        say "would save changed generated keys in $project/generated; a failed put keeps the environment file"
+        return 0
+    fi
+    helper generated "$env_file" |
+        python3 -I "$repo/scripts/generated-keys.py" put --project "$project" --region "$region" \
+            --previous "$generated_file" ||
+        say "Warning: $project/generated is not saved; keep the environment file and repeat the bootstrap."
+}
+
 start() {
     say "step 7 of 9: start of the stack and the keys"
     for service in litellm openviking; do
@@ -1654,6 +1683,7 @@ start() {
     # OpenViking before the agent: the key of the agent must exist before the agent starts.
     up openviking
     openviking_key
+    generated_writeback
     # The rest. A service whose key is new starts with it: Compose makes a container
     # again when its environment changed.
     rest=
@@ -1710,7 +1740,9 @@ next_steps() {
     # shellcheck disable=SC2086 # the words of the two lists
     new_names=$(printf '%s\n' $made $kept | sort -u | tr '\n' ' ')
     if [ -n "${new_names% }" ]; then
-        say "- The host has a value that the secret lacks for: ${new_names% }. Read each one from $env_file on the host. Save it in each store of your credentials. Add it to .env on the development machine. Then run there: scripts/aws-host.sh secret < .env. This script never writes to Secrets Manager."
+        say "- Generated names: ${new_names% }. Check write-back with scripts/aws-host.sh generated-status."
+        say "- Preserve approved external copies through a private Secrets Manager read, never through SSM output."
+        say "- A failed write-back keeps $env_file. Repeat the bootstrap after the secret and its rights are ready."
     fi
     # Only the steps of the active options follow.
     if [ "$opt_pangolin" = 0 ]; then

@@ -152,6 +152,7 @@ else:
     (bin_dir / "aws").write_text("""#!/bin/sh
 printf '%s\\n' "$*" >>"$FORM_CALLS"
 case "$*" in
+    *get-secret-value*) printf 'ResourceNotFoundException\\n' >&2; exit 254 ;;
     *describe-secret*) printf 'present\\n' ;;
     *put-secret-value* | *create-secret*)
         for arg in "$@"; do

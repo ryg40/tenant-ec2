@@ -509,6 +509,19 @@ Resources:
               Bool:
                 aws:SecureTransport: "false"
 
+  # The bootstrap writes only these three keys. Retain them with the service data.
+  GeneratedSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub "${Project}/generated"
+      Description: The three service keys that the host bootstrap creates.
+      SecretString: >-
+        {"EC2_OPENVIKING_LITELLM_API_KEY":"","EC2_PI_DURABLE_LITELLM_API_KEY":"","EC2_PI_DURABLE_OPENVIKING_API_KEY":""}
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+
   # ----- Identity: the key pair, the instance role under the boundary, its instance profile.
   KeyPair:
     Type: AWS::EC2::KeyPair
@@ -602,6 +615,13 @@ Resources:
                   - secretsmanager:GetSecretValue
                   - secretsmanager:DescribeSecret
                 Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Project}/env-??????"
+              - Sid: GeneratedSecretWrite
+                Effect: Allow
+                Action:
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:DescribeSecret
+                Resource: !Ref GeneratedSecret
               # The two Bedrock statements name one model each. The role invokes no other
               # model. The inference profile sends a call to the Luna model in more than
               # one region, so the region of that model is open.

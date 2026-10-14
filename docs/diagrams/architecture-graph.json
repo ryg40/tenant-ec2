@@ -1,0 +1,682 @@
+{
+  "meta": {
+    "title": "tenant-ec2 architecture",
+    "subtitle": "The portable core and its options, not a deployed host.",
+    "snapshot": "Merged source files. No live deployment.",
+    "note": "Arrows show requests or dependencies, not live checks. Frames group related parts.",
+    "sources": [
+      "docs/diagrams/01-aws-core.json",
+      "docs/diagrams/02-services.json",
+      "docs/diagrams/03-entra-login.json",
+      "docs/diagrams/04-install-flow.json",
+      "docs/diagrams/05-options.json",
+      "docs/architecture.md",
+      "scripts/aws-host.cfn.yaml",
+      "compose.yaml",
+      "compose.caddy.yaml",
+      "compose.pangolin.yaml",
+      "compose.copilot.yaml",
+      "docs/options/README.md"
+    ]
+  },
+  "groups": [
+    {"id": "aws", "label": "AWS infrastructure", "colour": "Blue", "color": "#285b88"},
+    {"id": "service", "label": "Service", "colour": "Green", "color": "#176b5b"},
+    {"id": "data", "label": "Stored data", "colour": "Brown", "color": "#94601d"},
+    {"id": "identity", "label": "Identity or credential", "colour": "Red", "color": "#9c3d45"},
+    {"id": "external", "label": "External client or tool", "colour": "Gray", "color": "#52616b"}
+  ],
+  "statuses": [
+    {"id": "core", "label": "Core", "meaning": "The portable core. A solid border marks it.", "border": "solid"},
+    {"id": "option", "label": "Option", "meaning": "Off until the installer selects it. A dashed border marks it.", "border": "dashed"}
+  ],
+  "edgeKinds": [
+    {"id": "request", "label": "Request", "color": "#79b8ff", "meaning": "A call or traffic from one part to another."},
+    {"id": "dependency", "label": "Dependency", "color": "#a8b3bd", "meaning": "One part needs, limits or holds another part."},
+    {"id": "login-step", "label": "Login step", "color": "#f0919b", "meaning": "A numbered step of the browser login."},
+    {"id": "install-step", "label": "Install step", "color": "#e3b55f", "meaning": "A step of the install order, or its result."}
+  ],
+  "diagrams": [
+    {
+      "id": "aws-core",
+      "number": "01",
+      "title": "AWS core",
+      "subtitle": "One instance. Separate block storage, shared files and identity.",
+      "source": "docs/diagrams/01-aws-core.json",
+      "notes": [
+        "IAM: Provisioner creates bounded roles; InstanceRole permits the host to read its secret and invoke Bedrock.",
+        "Docker requires four durable mounts and the metadata guard: the EBS data volume plus the three EFS access points.",
+        "EnableOperations and EnableBucket are separate switches, both off by default. The administrator owns the snapshot role.",
+        "Gateway calls Bedrock through the internet route. EnableBucket adds scoped object access only after the policy update.",
+        "Core opens no tunnel port. EnablePangolin adds UDP 51820 and 21820. EFS and EBS are separate services."
+      ]
+    },
+    {
+      "id": "services",
+      "number": "02",
+      "title": "Core services",
+      "subtitle": "compose.yaml + compose.caddy.yaml / only the edge publishes ports.",
+      "source": "docs/diagrams/02-services.json",
+      "notes": [
+        "Default public name: ok.<domain>. Caddy targets ok-auth, never open-knowledge.",
+        "Optional names: agent / llm / ov use edge-agent / edge-llm / edge-ov, AdminCidr and each service key.",
+        "Internal: db, llm, memory, knowledge, knowledge-agent and the four edge resource networks.",
+        "knowledge: gate + OpenKnowledge only. knowledge-agent: agent + OpenKnowledge only. OpenKnowledge uses port 80.",
+        "Gate networks: knowledge, gate-egress, edge-ok. edge-ok: 198.18.5.0/29, edge + gate only.",
+        "Internet routes: egress, gate-egress, edge-core. The gate is the only member of gate-egress.",
+        "The agent shares egress with the gateway, also with web search off.",
+        "Rendered core: 7 services / 12 networks. Copilot: 8 / 13. Pangolin: 9 / 12. Both options: 10 / 13.",
+        "The agent uses http://ok.<domain>/mcp, an internal alias. OpenKnowledge makes no model call."
+      ]
+    },
+    {
+      "id": "entra-login",
+      "number": "03",
+      "title": "Entra login",
+      "subtitle": "Browser login uses Entra ID. Neither edge skips the gate.",
+      "source": "docs/diagrams/03-entra-login.json",
+      "notes": [
+        "Steps 1-8 match docs/entra.md. Step 4 sends the client secret and PKCE verifier; Entra returns the ID token.",
+        "Step 5 checks signature, tenant issuer, client id, nonce and expiry. Step 6 requires the allowed group.",
+        "Step 7 sets the Secure, HttpOnly cookie and redirects to the page. Step 8 checks each later session on knowledge.",
+        "Pangolin replaces Caddy only. Its ok resource has no second Pangolin login."
+      ]
+    },
+    {
+      "id": "install-flow",
+      "number": "04",
+      "title": "Install flow",
+      "subtitle": "The installer prepares inputs. The instance reads its secret and builds pinned kits.",
+      "source": "docs/diagrams/04-install-flow.json",
+      "notes": [
+        "The secret exists before boot. User data checks SnapshotCommit before it runs any script of the clone.",
+        "Docker drop-in: tenant-ec2-storage.conf requires four durable mounts and the metadata guard before Docker starts.",
+        "Verify: compose ps, file-set test, service list, then verify-deployed.py with file set and public names.",
+        "Verify uses internal requests only. It runs no kits.lock verify line and proves no login, public route or model answer.",
+        "The bootstrap writes COMPOSE_FILE into the host environment file. A manual Compose command uses the same overlays.",
+        "The host keeps generated service keys. The installer saves them and updates the secret after boot.",
+        "This picture is an install order, not a deploy approval. No AWS, Entra, DNS or credential-store change runs here."
+      ]
+    },
+    {
+      "id": "options",
+      "number": "05",
+      "title": "Options",
+      "subtitle": "An option stays off until the installer selects it. The core needs no home lab.",
+      "source": "docs/diagrams/05-options.json",
+      "notes": [
+        "EC2_OPTIONS: empty / copilot / pangolin / pangolin,copilot. Unknown option names stop the scripts.",
+        "Each selected public name gets an A record to ElasticIp. Pangolin adds pangolin.<domain>.",
+        "Pangolin keeps ok-auth as the ok target. Its ok resource uses the Entra gate, not a second Pangolin login.",
+        "DNS provider credentials stay off the core host. Only Pangolin needs the Porkbun pair there for DNS-01.",
+        "A Newt site uses UDP 51820. UDP 21820 serves clients; both ports open only with Pangolin."
+      ]
+    }
+  ],
+  "frames": [
+    {"id": "aws-core/install", "diagram": "aws-core", "label": "Installer / IAM",
+     "nodes": ["provisioner", "boundary", "instance-role", "key-pair"]},
+    {"id": "aws-core/vpc", "diagram": "aws-core", "label": "VPC",
+     "nodes": ["elastic-ip", "instance-sg", "instance", "data-volume", "internet-route", "efs-sg", "mount-target"]},
+    {"id": "aws-core/subnet", "diagram": "aws-core", "label": "Subnet", "parent": "aws-core/vpc",
+     "nodes": ["instance", "mount-target"]},
+    {"id": "aws-core/services", "diagram": "aws-core", "label": "AWS services",
+     "nodes": ["stack-secret", "bedrock", "efs", "access-points", "bucket"]},
+    {"id": "aws-core/operations", "diagram": "aws-core", "label": "EnableOperations=true / optional",
+     "nodes": ["snapshots", "host-logs", "billing-alarm"]},
+    {"id": "services/compose", "diagram": "services", "label": "EC2 / Docker Compose",
+     "nodes": ["caddy", "ok-auth", "open-knowledge", "pi-durable", "openviking", "litellm", "litellm-db"]},
+    {"id": "services/external", "diagram": "services", "label": "External",
+     "nodes": ["entra", "bedrock"]},
+    {"id": "entra-login/path", "diagram": "entra-login", "label": "Browser request / one public name",
+     "nodes": ["browser", "caddy", "ok-auth", "open-knowledge"]},
+    {"id": "entra-login/identity", "diagram": "entra-login", "label": "Identity provider",
+     "nodes": ["entra"]},
+    {"id": "install-flow/installer", "diagram": "install-flow", "label": "Installer machine / commands",
+     "nodes": ["step-provisioner", "step-env", "step-secret", "step-deploy", "step-dns", "step-verify"]},
+    {"id": "install-flow/host", "diagram": "install-flow", "label": "EC2 / first boot",
+     "nodes": ["step-user-data", "step-bootstrap", "step-kits", "step-start"]},
+    {"id": "options/core", "diagram": "options", "label": "Portable core",
+     "nodes": ["core-services", "caddy"]},
+    {"id": "options/pangolin", "diagram": "options", "label": "EC2_OPTIONS: pangolin",
+     "nodes": ["pangolin", "newt-site", "porkbun-dns01"]},
+    {"id": "options/copilot", "diagram": "options", "label": "EC2_OPTIONS: copilot",
+     "nodes": ["copilot", "copilot-routes", "copilot-tokens"]},
+    {"id": "options/dns", "diagram": "options", "label": "EC2_DNS_PROVIDER",
+     "nodes": ["dns-providers", "dns-records", "dns-credentials"]},
+    {"id": "options/home", "diagram": "options", "label": "Optional home lab tools",
+     "nodes": ["home-tools", "credential-stores"]}
+  ],
+  "layout": {
+    "rows": [
+      ["install-flow/installer"],
+      ["install-flow/host"],
+      ["aws-core/install", "aws-core/vpc"],
+      ["aws-core/services", "aws-core/operations"],
+      ["entra-login/path", "services/compose", "services/external"],
+      ["options/core", "options/pangolin", "options/copilot"],
+      ["options/dns", "options/home"]
+    ]
+  },
+  "nodes": [
+    {
+      "id": "provisioner", "label": "Provisioner", "caption": "Scoped IAM user",
+      "group": "identity", "status": "core", "frame": "aws-core/install", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Provisioner", "Scoped IAM user", "Deploys the host stack"]},
+      "summary": "The provisioner is a scoped IAM user. It deploys the host stack and creates only bounded roles. Its key stays off the host.",
+      "sources": ["scripts/aws-provisioner.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "boundary", "label": "Boundary", "caption": "Limits each host role",
+      "group": "identity", "status": "core", "frame": "aws-core/install", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Boundary", "Limits each host role", "Grants no right by itself"]},
+      "summary": "The permissions boundary limits each host role. It grants no right by itself. The provisioner gives it to each host role.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "instance-role", "label": "InstanceRole", "caption": "InstanceProfile attaches it",
+      "group": "identity", "status": "core", "frame": "aws-core/install", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["InstanceRole", "InstanceProfile attaches it", "No provisioner key on EC2"]},
+      "summary": "InstanceProfile attaches the role to the instance. The role lets the host read its secret and invoke Bedrock. No provisioner key goes to EC2.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "key-pair", "label": "KeyPair", "caption": "SshPublicKey is imported",
+      "group": "identity", "status": "core", "frame": "aws-core/install", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["KeyPair", "SshPublicKey is imported", "Private key stays off EC2"]},
+      "summary": "The stack imports SshPublicKey as the key pair of the instance. The private key stays off EC2. SSH is open from AdminCidr only.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "elastic-ip", "label": "ElasticIp", "caption": "Stable public address",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["ElasticIp", "Stable public address", "DNS A records point here"]},
+      "summary": "The Elastic IP is the stable public address of the host. The A records of the public names point here. The deploy makes it.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "instance-sg", "label": "InstanceSecurityGroup", "caption": "Public: TCP 80, 443",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["InstanceSecurityGroup", "Public: TCP 80, 443", "AdminCidr only: TCP 22"]},
+      "summary": "The host security group accepts public TCP ports 80 and 443. It accepts SSH on TCP port 22 from AdminCidr only. EnablePangolin adds UDP ports 51820 and 21820.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "instance", "label": "Instance", "caption": "Amazon Linux 2023 x86_64",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Instance", "Amazon Linux 2023 x86_64", "t3a.large / Docker Compose"]},
+      "summary": "The instance runs Amazon Linux 2023 x86_64. The default instance type is t3a.large. Docker Compose runs the services. One public subnet holds it.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "data-volume", "label": "DataVolume", "caption": "Encrypted gp3 / retained",
+      "group": "data", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["DataVolume", "Encrypted gp3 / retained", "Postgres and agent state"]},
+      "summary": "The encrypted gp3 data volume holds the local databases and the agent state. The stack retains it. Docker starts only when it is mounted.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "internet-route", "label": "InternetGateway", "caption": "RouteTable / DefaultRoute",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["InternetGateway", "RouteTable / DefaultRoute", "Internet route of Subnet"]},
+      "summary": "The internet gateway, the route table and the default route give the subnet its internet route. The gateway service calls Bedrock through this route.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "efs-sg", "label": "MountTargetSecurityGroup", "caption": "TCP 2049 from the host group",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["MountTargetSecurityGroup", "TCP 2049 from", "InstanceSecurityGroup only"]},
+      "summary": "The EFS security group accepts TCP port 2049. It accepts it from the host security group only.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "mount-target", "label": "MountTarget", "caption": "One target in Subnet",
+      "group": "aws", "status": "core", "frame": "aws-core/vpc", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["MountTarget", "One target in Subnet", "EFS uses TLS and IAM"]},
+      "summary": "One mount target in the subnet serves EFS to the instance. The mount uses TLS and IAM.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "stack-secret", "label": "Secrets Manager", "caption": "<project>/env",
+      "group": "identity", "status": "core", "frame": "aws-core/services", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Secrets Manager", "<project>/env", "Host reads / installer writes"]},
+      "summary": "The stack secret <project>/env holds the environment of the host. The installer writes it before the deploy. The host reads it at the first boot.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "bedrock", "label": "Bedrock", "caption": "GPT-6 Luna / xhigh",
+      "group": "service", "status": "core", "frame": "services/external", "diagrams": ["aws-core", "services"],
+      "cards": {
+        "aws-core": ["Bedrock", "GPT-6 Luna / xhigh", "Titan text embeddings v2"],
+        "services": ["Bedrock", "GPT-6 Luna / xhigh", "Titan v2 / 1024 dimensions"]
+      },
+      "summary": "Bedrock serves GPT-6 Luna at the reasoning effort xhigh. It also serves Titan text embeddings v2 with 1024 dimensions. The gateway calls it as bedrock/luna and bedrock/embed with the instance role.",
+      "sources": ["scripts/aws-host.cfn.yaml", "compose.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "efs", "label": "FileSystem / EFS", "caption": "Encrypted / retained",
+      "group": "data", "status": "core", "frame": "aws-core/services", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["FileSystem / EFS", "Encrypted / retained", "Three access points"]},
+      "summary": "The encrypted EFS file system holds the shared files. The stack retains it. It has three access points.",
+      "sources": ["scripts/aws-host.cfn.yaml"]
+    },
+    {
+      "id": "access-points", "label": "Access points", "caption": "UID:GID for each service",
+      "group": "data", "status": "core", "frame": "aws-core/services", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Access points / UID:GID", "open-knowledge 10001:10001", "openviking 1101:1101", "shared 1102:1102"]},
+      "summary": "The open-knowledge access point enforces 10001:10001. The openviking access point enforces 1101:1101. The shared access point enforces 1102:1102.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "bucket", "label": "Bucket / S3", "caption": "EnableBucket=true",
+      "group": "data", "status": "option", "frame": "aws-core/services", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Bucket / S3", "EnableBucket=true", "Private / SSE-S3 / retained"]},
+      "summary": "EnableBucket=true adds a private S3 bucket with SSE-S3 encryption. The stack retains it. The instance role gets scoped object access only after the policy update.",
+      "sources": ["scripts/aws-host.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "snapshots", "label": "Data-volume snapshots", "caption": "03:00 UTC / keep seven",
+      "group": "data", "status": "option", "frame": "aws-core/operations", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Daily data-volume snapshots", "03:00 UTC / keep seven", "bootstrap-<Project>-dlm"]},
+      "summary": "EnableOperations adds a daily snapshot of the data volume at 03:00 UTC. It keeps seven snapshots. The administrator owns the snapshot role bootstrap-<Project>-dlm, and the provisioner cannot change it.",
+      "sources": ["scripts/aws-host.cfn.yaml", "scripts/aws-provisioner.cfn.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "host-logs", "label": "Host logs / CloudWatch", "caption": "/<Project>/host / 14 days",
+      "group": "data", "status": "option", "frame": "aws-core/operations", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Host logs / CloudWatch", "/<Project>/host / 14 days", "Journal export each minute"]},
+      "summary": "EnableOperations adds the log group /<Project>/host. The log group keeps the logs for 14 days. The host exports its journal each minute.",
+      "sources": ["scripts/aws-host.cfn.yaml", "scripts/aws-provisioner.cfn.yaml"]
+    },
+    {
+      "id": "billing-alarm", "label": "Billing alarm + SNS topic", "caption": "us-east-1",
+      "group": "aws", "status": "option", "frame": "aws-core/operations", "diagrams": ["aws-core"],
+      "cards": {"aws-core": ["Billing alarm + SNS topic", "<Project>-billing / -alarm", "us-east-1"]},
+      "summary": "EnableOperations adds the billing alarm <Project>-billing and its topic <Project>-alarm. The billing metric is in us-east-1 only.",
+      "sources": ["scripts/aws-host.cfn.yaml", "scripts/aws-provisioner.cfn.yaml"]
+    },
+    {
+      "id": "caddy", "label": "caddy", "caption": "Core edge / TCP 80, 443",
+      "group": "service", "status": "core", "frame": "services/compose", "diagrams": ["services", "entra-login", "options"],
+      "cards": {
+        "services": ["caddy / edge-core", "TCP 80 / 443", "EBS: certificate state"],
+        "entra-login": ["caddy", "Ends HTTPS", "Routes ok to ok-auth"],
+        "options": ["caddy", "One certificate per name", "HTTP-01 or TLS-ALPN-01"]
+      },
+      "summary": "Caddy is the core edge and the only service that publishes ports. It ends HTTPS with one certificate for each selected name. It routes ok to ok-auth, never to open-knowledge. The Pangolin option replaces it.",
+      "sources": ["compose.caddy.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "ok-auth", "label": "ok-auth", "caption": "oauth2-proxy / HTTP 4180",
+      "group": "identity", "status": "core", "frame": "services/compose", "diagrams": ["services", "entra-login"],
+      "cards": {
+        "services": ["ok-auth / oauth2-proxy", "HTTP 4180", "Entra ID group check"],
+        "entra-login": ["ok-auth / HTTP 4180", "5. Check token", "6. Check allowed group"]
+      },
+      "summary": "The gate is oauth2-proxy on HTTP port 4180. It checks the Entra token and the allowed group. Only an allowed session reaches OpenKnowledge. It is the only member of gate-egress.",
+      "sources": ["compose.yaml", "ok-auth/oauth2-proxy.cfg", "docs/entra.md"]
+    },
+    {
+      "id": "open-knowledge", "label": "open-knowledge", "caption": "HTTP 80 / no login here",
+      "group": "service", "status": "core", "frame": "services/compose", "diagrams": ["services", "entra-login"],
+      "cards": {
+        "services": ["open-knowledge", "HTTP 80 / no login here", "EFS: open-knowledge, shared"],
+        "entra-login": ["open-knowledge", "HTTP 80", "Private knowledge network"]
+      },
+      "summary": "OpenKnowledge listens on HTTP port 80 and has no login of its own. The gate reaches it on knowledge, and the agent reaches it on knowledge-agent. It keeps its files on EFS. It makes no model call.",
+      "sources": ["compose.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "pi-durable", "label": "pi-durable", "caption": "Basic agent / HTTP 5470",
+      "group": "service", "status": "core", "frame": "services/compose", "diagrams": ["services"],
+      "cards": {"services": ["pi-durable / basic agent", "HTTP 5470 / no web search", "EBS: state / EFS: shared"]},
+      "summary": "The basic agent has no web search. It calls OpenViking with a user key and the gateway with a virtual key. It calls OpenKnowledge directly, not through the gate. Its state is on EBS.",
+      "sources": ["compose.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "openviking", "label": "openviking", "caption": "Memory / HTTP 1933",
+      "group": "service", "status": "core", "frame": "services/compose", "diagrams": ["services"],
+      "cards": {"services": ["openviking", "HTTP 1933 / bot off", "EFS: openviking, shared"]},
+      "summary": "OpenViking is the memory service on HTTP port 1933. Its bot is off. It calls the gateway for embeddings and vision with its own virtual key. It keeps its data on EFS.",
+      "sources": ["compose.yaml", "openviking/ov.conf", "docs/architecture.md"]
+    },
+    {
+      "id": "litellm", "label": "litellm", "caption": "Gateway / HTTP 4000",
+      "group": "service", "status": "core", "frame": "services/compose", "diagrams": ["services"],
+      "cards": {"services": ["litellm / gateway", "HTTP 4000", "bedrock/luna + bedrock/embed"]},
+      "summary": "LiteLLM is the model gateway on HTTP port 4000. It serves bedrock/luna at xhigh and bedrock/embed. It keeps its data in Postgres. Its outbound calls use egress.",
+      "sources": ["compose.yaml", "litellm/config.yaml", "docs/architecture.md"]
+    },
+    {
+      "id": "litellm-db", "label": "litellm-db", "caption": "Postgres / TCP 5432",
+      "group": "data", "status": "core", "frame": "services/compose", "diagrams": ["services"],
+      "cards": {"services": ["litellm-db / Postgres", "TCP 5432", "EBS: database"]},
+      "summary": "Postgres holds the data of the gateway. It listens on TCP port 5432 on the internal network db. Its files are on the EBS data volume.",
+      "sources": ["compose.yaml"]
+    },
+    {
+      "id": "entra", "label": "Microsoft Entra ID", "caption": "One tenant / allowed group",
+      "group": "identity", "status": "core", "frame": "services/external", "diagrams": ["services", "entra-login"],
+      "cards": {
+        "services": ["Microsoft Entra ID", "One tenant / allowed group", "Browser login"],
+        "entra-login": ["Microsoft Entra ID", "Tenant login", "Allowed group claim"]
+      },
+      "summary": "Microsoft Entra ID is the identity provider of the browser login. One tenant and one allowed group gate OpenKnowledge. The gate reaches it on gate-egress.",
+      "sources": ["compose.yaml", "ok-auth/oauth2-proxy.cfg", "docs/entra.md"]
+    },
+    {
+      "id": "browser", "label": "Browser", "caption": "Opens ok.<domain>",
+      "group": "external", "status": "core", "frame": "entra-login/path", "diagrams": ["entra-login"],
+      "cards": {"entra-login": ["Browser", "Opens ok.<domain>", "Stores the secure cookie"]},
+      "summary": "The browser opens ok.<domain>. It follows the redirect to Entra ID and back to the same public name. It stores the secure session cookie.",
+      "sources": ["docs/entra.md", "docs/architecture.md"]
+    },
+    {
+      "id": "step-provisioner", "label": "1 / Provisioner", "caption": "Administrator installs IAM",
+      "group": "identity", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["1 / Provisioner", "Administrator installs IAM", "Creates only bounded roles"]},
+      "summary": "An administrator prepares the provisioner and the boundary. The provisioner creates only bounded roles.",
+      "sources": ["docs/architecture.md", "scripts/aws-provisioner.sh"]
+    },
+    {
+      "id": "step-env", "label": "2 / .env", "caption": "Core names and Entra values",
+      "group": "identity", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["2 / .env", "Core names and Entra values", "EC2_OPTIONS / edge names"]},
+      "summary": "The installer sets the core names and the Entra values in .env. EC2_OPTIONS selects the options. The edge names select the public names.",
+      "sources": ["docs/architecture.md", ".env.example"]
+    },
+    {
+      "id": "step-secret", "label": "3 / secret", "caption": "aws-host.sh secret",
+      "group": "identity", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["3 / secret", "aws-host.sh secret", "Writes <project>/env"]},
+      "summary": "aws-host.sh secret writes <project>/env to Secrets Manager. The secret exists before the deploy, because the first boot reads it.",
+      "sources": ["scripts/aws-host.sh", "docs/architecture.md"]
+    },
+    {
+      "id": "step-deploy", "label": "4 / deploy", "caption": "aws-host.sh deploy",
+      "group": "aws", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["4 / deploy", "aws-host.sh deploy", "CloudFormation makes EC2"]},
+      "summary": "aws-host.sh deploy runs CloudFormation. It makes the instance and the Elastic IP. A deploy creates billed AWS resources and runs only after approval.",
+      "sources": ["scripts/aws-host.sh", "docs/architecture.md", "README.md"]
+    },
+    {
+      "id": "step-dns", "label": "5 / outputs and dns", "caption": "Reads the Elastic IP",
+      "group": "aws", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["5 / outputs and dns", "Reads the Elastic IP", "Sets selected A records"]},
+      "summary": "The DNS step reads the Elastic IP from the stack. It sets the A records of the selected names while the host boots. DNS is necessary for public access and certificates, not for the internal checks.",
+      "sources": ["scripts/aws-host.sh", "scripts/dns-records.sh", "docs/architecture.md"]
+    },
+    {
+      "id": "step-user-data", "label": "6 / user data", "caption": "Check snapshot / mount data",
+      "group": "aws", "status": "core", "frame": "install-flow/host", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["6 / user data", "Check snapshot / mount data", "Docker requires four mounts"]},
+      "summary": "User data checks the snapshot commit before it runs a script of the clone. It installs the host tools and mounts the EBS data volume and the EFS access points. Docker requires the four durable mounts and the metadata guard.",
+      "sources": ["scripts/host-userdata.sh", "docs/architecture.md"]
+    },
+    {
+      "id": "step-bootstrap", "label": "7 / host-bootstrap.sh", "caption": "Reads secret / writes .env",
+      "group": "aws", "status": "core", "frame": "install-flow/host", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["7 / host-bootstrap.sh", "Reads secret / writes .env", "Selects COMPOSE_FILE"]},
+      "summary": "The bootstrap reads the secret and writes the host environment file. It selects COMPOSE_FILE for the selected options. A manual Compose command uses the same overlays.",
+      "sources": ["scripts/host-bootstrap.sh", "docs/architecture.md"]
+    },
+    {
+      "id": "step-kits", "label": "8 / kits.lock", "caption": "Clone tags / check commits",
+      "group": "aws", "status": "core", "frame": "install-flow/host", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["8 / kits.lock", "Clone tags / check commits", "Build one kit at a time"]},
+      "summary": "The bootstrap clones the kit tags of kits.lock and checks their commits. It uses the pins only. It builds one kit at a time.",
+      "sources": ["scripts/host-bootstrap.sh", "kits.lock"]
+    },
+    {
+      "id": "step-start", "label": "9 / start and keys", "caption": "Makes scoped service keys",
+      "group": "service", "status": "core", "frame": "install-flow/host", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["9 / start and keys", "Edge, gateway, memory, rest", "Makes scoped service keys"]},
+      "summary": "The bootstrap starts the edge, the gateway, memory and the rest. It makes scoped service keys. The host keeps them, and the installer saves them and updates the secret after boot.",
+      "sources": ["scripts/host-bootstrap.sh", "docs/architecture.md"]
+    },
+    {
+      "id": "step-verify", "label": "10 / verify", "caption": "One SSM command",
+      "group": "aws", "status": "core", "frame": "install-flow/installer", "diagrams": ["install-flow"],
+      "cards": {"install-flow": ["10 / verify", "One SSM command", "Four internal check parts"]},
+      "summary": "aws-host.sh verify sends one SSM command with four parts: docker compose ps, the file-set test, the service list and verify-deployed.py. The probes use internal endpoints only. They prove no login, public route or model answer.",
+      "sources": ["scripts/aws-host.sh", "scripts/verify-deployed.py", "docs/architecture.md"]
+    },
+    {
+      "id": "core-services", "label": "Core services", "caption": "Bedrock / Entra ID",
+      "group": "service", "status": "core", "frame": "options/core", "diagrams": ["options"],
+      "cards": {"options": ["Core services", "Bedrock / Entra ID", "Agent / knowledge / memory"]},
+      "summary": "The portable core uses Bedrock and Entra ID. It runs the agent, knowledge and memory. It needs no option and no home lab.",
+      "sources": [".env.example", "docs/options/README.md"]
+    },
+    {
+      "id": "pangolin", "label": "pangolin / gerbil / traefik", "caption": "Replaces caddy",
+      "group": "service", "status": "option", "frame": "options/pangolin", "diagrams": ["options"],
+      "cards": {"options": ["pangolin / gerbil / traefik", "Replaces caddy", "Adds the blueprint"]},
+      "summary": "EC2_OPTIONS=pangolin adds Pangolin, Gerbil and Traefik in place of caddy. Gerbil publishes 80, 443 and the two tunnel UDP ports. The blueprint keeps ok-auth as the target of ok.",
+      "sources": ["compose.pangolin.yaml", "pangolin/blueprint.yaml", "docs/options/pangolin.md"]
+    },
+    {
+      "id": "newt-site", "label": "Newt / home site", "caption": "Outbound tunnel to Gerbil",
+      "group": "external", "status": "option", "frame": "options/pangolin", "diagrams": ["options"],
+      "cards": {"options": ["Newt / home site", "Outbound tunnel to Gerbil", "Site uses UDP 51820"]},
+      "summary": "A home Newt site opens an outbound tunnel to Gerbil. Site traffic uses UDP 51820, and clients use UDP 21820. Both ports open only with Pangolin.",
+      "sources": ["docs/options/home-lab.md", "docs/architecture.md"]
+    },
+    {
+      "id": "porkbun-dns01", "label": "Porkbun DNS-01", "caption": "Wildcard certificate",
+      "group": "identity", "status": "option", "frame": "options/pangolin", "diagrams": ["options"],
+      "cards": {"options": ["Porkbun DNS-01", "Wildcard certificate", "Pangolin needs porkbun"]},
+      "summary": "Traefik uses Porkbun DNS-01 for the wildcard certificate of Pangolin. Thus Pangolin needs EC2_DNS_PROVIDER=porkbun. No record is a wildcard.",
+      "sources": ["docs/options/pangolin.md", "docs/options/dns.md"]
+    },
+    {
+      "id": "copilot", "label": "copilot", "caption": "Adds a gateway service",
+      "group": "service", "status": "option", "frame": "options/copilot", "diagrams": ["options"],
+      "cards": {"options": ["copilot", "Adds a gateway service", "Keeps Bedrock routes"]},
+      "summary": "EC2_OPTIONS=copilot adds the copilot service. The gateway reaches it on the network copilot. The Bedrock routes stay.",
+      "sources": ["compose.copilot.yaml", "docs/options/copilot.md"]
+    },
+    {
+      "id": "copilot-routes", "label": "copilot/luna + copilot/embed", "caption": "Luna stays at xhigh",
+      "group": "service", "status": "option", "frame": "options/copilot", "diagrams": ["options"],
+      "cards": {"options": ["copilot/luna + copilot/embed", "Luna stays at xhigh", "Requires Copilot login"]},
+      "summary": "The option adds the routes copilot/luna and copilot/embed. Luna stays at the reasoning effort xhigh. The routes need a Copilot login.",
+      "sources": ["litellm/copilot.yaml", "docs/options/copilot.md"]
+    },
+    {
+      "id": "copilot-tokens", "label": "Copilot token files", "caption": "EBS data volume",
+      "group": "data", "status": "option", "frame": "options/copilot", "diagrams": ["options"],
+      "cards": {"options": ["Copilot token files", "EBS data volume", "New login for this host"]},
+      "summary": "The Copilot token files stay on the EBS data volume. The option needs a new login for this host. With EnableOperations, the volume snapshots also hold the tokens.",
+      "sources": ["compose.copilot.yaml", "docs/options/copilot.md"]
+    },
+    {
+      "id": "dns-providers", "label": "DNS provider", "caption": "EC2_DNS_PROVIDER",
+      "group": "aws", "status": "core", "frame": "options/dns", "diagrams": ["options"],
+      "cards": {"options": ["manual / default", "porkbun / route53", "cloudflare"]},
+      "summary": "EC2_DNS_PROVIDER selects manual, porkbun, route53 or cloudflare. The default is manual, and you make each record by hand. The other three set the records through an API.",
+      "sources": ["scripts/dns-records.sh", "docs/options/dns.md"]
+    },
+    {
+      "id": "dns-records", "label": "EC2_EDGE_NAMES", "caption": "Default: ok only",
+      "group": "aws", "status": "core", "frame": "options/dns", "diagrams": ["options"],
+      "cards": {"options": ["EC2_EDGE_NAMES", "ok / agent / llm / ov", "Default: ok only"]},
+      "summary": "EC2_EDGE_NAMES selects the public names: ok, agent, llm and ov. The default is ok only. Each selected name gets an A record to the Elastic IP, and Pangolin adds pangolin.<domain>.",
+      "sources": ["docs/options/dns.md", "docs/options/README.md"]
+    },
+    {
+      "id": "dns-credentials", "label": "DNS credentials", "caption": "Stay on installer machine",
+      "group": "identity", "status": "option", "frame": "options/dns", "diagrams": ["options"],
+      "cards": {"options": ["DNS credentials", "Stay on installer machine", "Pangolin Porkbun exception"]},
+      "summary": "DNS provider credentials stay on the installer machine. The Porkbun pair of Pangolin is the only exception. Traefik needs that pair on the host for DNS-01.",
+      "sources": ["docs/options/pangolin.md", "docs/options/README.md"]
+    },
+    {
+      "id": "home-tools", "label": "Home tools", "caption": "Newt site / web search",
+      "group": "external", "status": "option", "frame": "options/home", "diagrams": ["options"],
+      "cards": {"options": ["Home tools", "Newt site / web search", "Private kit source"]},
+      "summary": "Home lab tools are optional: a Newt site, agent web search and private kit sources. The core needs none of them. The locked agent source is private and needs its own read-only clone credential.",
+      "sources": ["docs/options/home-lab.md", "docs/architecture.md"]
+    },
+    {
+      "id": "credential-stores", "label": "Bitwarden / Vault", "caption": "Optional credential copies",
+      "group": "identity", "status": "option", "frame": "options/home", "diagrams": ["options"],
+      "cards": {"options": ["Bitwarden / Vault", "Optional credential copies", "Core does not need them"]},
+      "summary": "Bitwarden and Vault can hold copies of the provisioner key. EC2_CREDENTIAL_STORES=home-lab selects them. The core does not need them.",
+      "sources": ["docs/options/home-lab.md"]
+    }
+  ],
+  "edges": [
+    {"id": "boundary-role", "from": "boundary", "to": "instance-role", "kind": "dependency", "label": "limits", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "role-instance", "from": "instance-role", "to": "instance", "kind": "dependency", "label": "profile", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "key-instance", "from": "key-pair", "to": "instance", "kind": "dependency", "label": "SSH key", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "eip-sg", "from": "elastic-ip", "to": "instance-sg", "kind": "request", "label": "inbound", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "sg-instance", "from": "instance-sg", "to": "instance", "kind": "request", "label": "filter", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "instance-volume", "from": "instance", "to": "data-volume", "kind": "dependency", "label": "attach", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "instance-mount", "from": "instance", "to": "mount-target", "kind": "request", "label": "NFS", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "efssg-mount", "from": "efs-sg", "to": "mount-target", "kind": "dependency", "label": "filter", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "mount-efs", "from": "mount-target", "to": "efs", "kind": "request", "label": "TLS + IAM", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "efs-aps", "from": "efs", "to": "access-points", "kind": "dependency", "label": "mount via", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "instance-route", "from": "instance", "to": "internet-route", "kind": "request", "label": "outbound", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "provisioner-role", "from": "provisioner", "to": "instance-role", "kind": "dependency", "label": "creates, bounded", "status": "core", "source": "docs/architecture.md"},
+    {"id": "role-secret", "from": "instance-role", "to": "stack-secret", "kind": "dependency", "label": "permits read", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "role-bedrock", "from": "instance-role", "to": "bedrock", "kind": "dependency", "label": "permits invoke", "status": "core", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "role-bucket", "from": "instance-role", "to": "bucket", "kind": "dependency", "label": "scoped object access", "status": "option", "source": "scripts/aws-host.cfn.yaml"},
+    {"id": "snapshots-volume", "from": "snapshots", "to": "data-volume", "kind": "dependency", "label": "daily snapshot", "status": "option", "source": "docs/architecture.md"},
+    {"id": "instance-logs", "from": "instance", "to": "host-logs", "kind": "request", "label": "journal export", "status": "option", "source": "docs/diagrams/01-aws-core.json"},
+    {"id": "caddy-auth", "from": "caddy", "to": "ok-auth", "kind": "request", "label": "edge-ok", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "auth-ok", "from": "ok-auth", "to": "open-knowledge", "kind": "request", "label": "knowledge", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "agent-ov", "from": "pi-durable", "to": "openviking", "kind": "request", "label": "memory / user key", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "ov-llm", "from": "openviking", "to": "litellm", "kind": "request", "label": "llm / virtual key", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "agent-llm", "from": "pi-durable", "to": "litellm", "kind": "request", "label": "llm / virtual key", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "llm-db", "from": "litellm", "to": "litellm-db", "kind": "request", "label": "db", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "llm-bedrock", "from": "litellm", "to": "bedrock", "kind": "request", "label": "egress / instance role", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "agent-ok", "from": "pi-durable", "to": "open-knowledge", "kind": "request", "label": "knowledge-agent / direct call", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "auth-entra", "from": "ok-auth", "to": "entra", "kind": "request", "label": "gate-egress / OIDC", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "caddy-volume", "from": "caddy", "to": "data-volume", "kind": "dependency", "label": "certificate state", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "db-volume", "from": "litellm-db", "to": "data-volume", "kind": "dependency", "label": "database", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "agent-volume", "from": "pi-durable", "to": "data-volume", "kind": "dependency", "label": "state", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "agent-aps", "from": "pi-durable", "to": "access-points", "kind": "dependency", "label": "shared", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "ok-aps", "from": "open-knowledge", "to": "access-points", "kind": "dependency", "label": "open-knowledge, shared", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "ov-aps", "from": "openviking", "to": "access-points", "kind": "dependency", "label": "openviking, shared", "status": "core", "source": "docs/diagrams/02-services.json"},
+    {"id": "login-1", "from": "browser", "to": "caddy", "kind": "login-step", "label": "1. HTTPS request", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-1b", "from": "caddy", "to": "ok-auth", "kind": "login-step", "label": "1. HTTP proxy", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-2", "from": "ok-auth", "to": "browser", "kind": "login-step", "label": "2. No session: redirect to Entra ID", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-3", "from": "browser", "to": "entra", "kind": "login-step", "label": "3. Sign in", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-3b", "from": "entra", "to": "ok-auth", "kind": "login-step", "label": "3. Callback via browser + edge", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-4", "from": "ok-auth", "to": "entra", "kind": "login-step", "label": "4. Code / token: gate-egress", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-7", "from": "ok-auth", "to": "browser", "kind": "login-step", "label": "7. Set __Host-ok cookie", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "login-8", "from": "ok-auth", "to": "open-knowledge", "kind": "login-step", "label": "8. Valid session", "status": "core", "source": "docs/diagrams/03-entra-login.json"},
+    {"id": "install-a", "from": "step-provisioner", "to": "step-env", "kind": "install-step", "label": "prepare", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-b", "from": "step-env", "to": "step-secret", "kind": "install-step", "label": "validate", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-c", "from": "step-secret", "to": "step-deploy", "kind": "install-step", "label": "before boot", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-d", "from": "step-deploy", "to": "step-dns", "kind": "install-step", "label": "outputs", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-e", "from": "step-deploy", "to": "step-user-data", "kind": "install-step", "label": "EC2 first boot", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-f", "from": "step-user-data", "to": "step-bootstrap", "kind": "install-step", "label": "prepared host", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-g", "from": "step-bootstrap", "to": "step-kits", "kind": "install-step", "label": "pins only", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-h", "from": "step-kits", "to": "step-start", "kind": "install-step", "label": "images", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-i", "from": "step-start", "to": "step-verify", "kind": "install-step", "label": "after bootstrap", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "install-j", "from": "step-dns", "to": "step-verify", "kind": "install-step", "label": "DNS for public access, not internal probes", "status": "core", "source": "docs/diagrams/04-install-flow.json"},
+    {"id": "prepare-provisioner", "from": "step-provisioner", "to": "provisioner", "kind": "install-step", "label": "prepares", "status": "core", "source": "docs/architecture.md"},
+    {"id": "write-secret", "from": "step-secret", "to": "stack-secret", "kind": "install-step", "label": "writes", "status": "core", "source": "docs/architecture.md"},
+    {"id": "deploy-instance", "from": "step-deploy", "to": "instance", "kind": "install-step", "label": "makes", "status": "core", "source": "docs/architecture.md"},
+    {"id": "deploy-eip", "from": "step-deploy", "to": "elastic-ip", "kind": "install-step", "label": "makes", "status": "core", "source": "docs/architecture.md"},
+    {"id": "dns-names", "from": "step-dns", "to": "dns-records", "kind": "install-step", "label": "sets the selected names", "status": "core", "source": "docs/architecture.md"},
+    {"id": "userdata-volume", "from": "step-user-data", "to": "data-volume", "kind": "install-step", "label": "mounts", "status": "core", "source": "docs/architecture.md"},
+    {"id": "userdata-aps", "from": "step-user-data", "to": "access-points", "kind": "install-step", "label": "mounts", "status": "core", "source": "docs/architecture.md"},
+    {"id": "bootstrap-secret", "from": "step-bootstrap", "to": "stack-secret", "kind": "install-step", "label": "reads", "status": "core", "source": "docs/architecture.md"},
+    {"id": "start-core", "from": "step-start", "to": "core-services", "kind": "install-step", "label": "starts", "status": "core", "source": "docs/architecture.md"},
+    {"id": "verify-instance", "from": "step-verify", "to": "instance", "kind": "install-step", "label": "one SSM command", "status": "core", "source": "docs/architecture.md"},
+    {"id": "pangolin-replaces", "from": "pangolin", "to": "caddy", "kind": "dependency", "label": "replaces", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "newt-tunnel", "from": "newt-site", "to": "pangolin", "kind": "request", "label": "tunnel", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "wildcard", "from": "porkbun-dns01", "to": "pangolin", "kind": "dependency", "label": "TLS setup", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "copilot-adds", "from": "copilot", "to": "copilot-routes", "kind": "dependency", "label": "adds", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "copilot-state", "from": "copilot", "to": "copilot-tokens", "kind": "dependency", "label": "keeps state", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "dns-selected", "from": "dns-providers", "to": "dns-records", "kind": "dependency", "label": "selected records", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "pangolin-gate", "from": "pangolin", "to": "ok-auth", "kind": "request", "label": "ok resource target", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "records-eip", "from": "dns-records", "to": "elastic-ip", "kind": "dependency", "label": "A record", "status": "core", "source": "docs/diagrams/05-options.json"},
+    {"id": "dns01-pair", "from": "porkbun-dns01", "to": "dns-credentials", "kind": "dependency", "label": "Porkbun pair on the host", "status": "option", "source": "docs/diagrams/05-options.json"},
+    {"id": "providers-creds", "from": "dns-providers", "to": "dns-credentials", "kind": "dependency", "label": "provider credentials", "status": "option", "source": "docs/options/dns.md"},
+    {"id": "llm-copilot", "from": "litellm", "to": "copilot", "kind": "request", "label": "network copilot", "status": "option", "source": "compose.copilot.yaml"},
+    {"id": "agent-search", "from": "pi-durable", "to": "home-tools", "kind": "request", "label": "web search", "status": "option", "source": "docs/options/home-lab.md"},
+    {"id": "kits-private", "from": "step-kits", "to": "home-tools", "kind": "dependency", "label": "private kit source", "status": "option", "source": "docs/options/home-lab.md"},
+    {"id": "provisioner-stores", "from": "provisioner", "to": "credential-stores", "kind": "dependency", "label": "optional key copy", "status": "option", "source": "docs/options/home-lab.md"}
+  ],
+  "tours": [
+    {
+      "id": "aws-core",
+      "label": "01 AWS core",
+      "diagram": "aws-core",
+      "steps": [
+        {"nodes": ["provisioner", "boundary", "instance-role"], "text": "The provisioner is a scoped IAM user. It deploys the host stack. Each host role gets the permissions boundary."},
+        {"nodes": ["instance-role", "key-pair", "instance"], "text": "InstanceProfile attaches InstanceRole to the instance. The stack imports the SSH public key. The private key stays off EC2."},
+        {"nodes": ["elastic-ip", "instance-sg", "instance"], "text": "The Elastic IP is the stable public address. The security group accepts TCP 80 and 443, and SSH from AdminCidr only."},
+        {"nodes": ["instance", "internet-route"], "text": "One public subnet holds the instance. Its outbound traffic uses the internet gateway and the default route."},
+        {"nodes": ["instance", "data-volume"], "text": "The encrypted gp3 data volume holds Postgres and the agent state. The stack retains it."},
+        {"nodes": ["efs-sg", "mount-target", "efs", "access-points"], "text": "EFS accepts TCP 2049 from the host security group only. The mount uses TLS and IAM. Three access points fix the user and group ids."},
+        {"nodes": ["instance-role", "stack-secret", "bedrock"], "text": "InstanceRole lets the host read its secret and invoke Bedrock. No provisioner key goes to EC2."},
+        {"nodes": ["bucket", "snapshots", "host-logs", "billing-alarm"], "text": "EnableBucket and EnableOperations are separate switches. Both are off by default. They add a bucket, snapshots, host logs and a billing alarm."}
+      ]
+    },
+    {
+      "id": "services",
+      "label": "02 Core services",
+      "diagram": "services",
+      "steps": [
+        {"nodes": ["caddy"], "text": "The core uses compose.yaml with compose.caddy.yaml. Only caddy publishes ports: TCP 80 and 443."},
+        {"nodes": ["caddy", "ok-auth", "open-knowledge"], "text": "The public name ok.<domain> targets ok-auth. The gate sends allowed browser requests to open-knowledge on knowledge."},
+        {"nodes": ["ok-auth", "entra"], "text": "The gate reaches Microsoft Entra ID on gate-egress. The gate is the only member of that network."},
+        {"nodes": ["pi-durable", "open-knowledge", "openviking"], "text": "The basic agent calls OpenKnowledge directly on knowledge-agent. Its memory calls go to OpenViking with a user key."},
+        {"nodes": ["pi-durable", "openviking", "litellm", "litellm-db"], "text": "The agent and OpenViking call litellm with separate virtual keys. The gateway reaches Postgres on db."},
+        {"nodes": ["litellm", "bedrock"], "text": "The gateway uses the instance role for bedrock/luna at xhigh and bedrock/embed. Its outbound calls use egress."},
+        {"nodes": ["caddy", "litellm-db", "pi-durable", "open-knowledge", "openviking", "data-volume", "access-points"], "text": "Each card names its store. The EBS data volume holds the database and local state. The EFS access points hold the files of knowledge and memory, and the shared files."}
+      ]
+    },
+    {
+      "id": "entra-login",
+      "label": "03 Entra login",
+      "diagram": "entra-login",
+      "steps": [
+        {"nodes": ["browser", "caddy", "ok-auth"], "text": "1. The browser opens ok.<domain>. Caddy ends HTTPS and sends the request to ok-auth on HTTP port 4180."},
+        {"nodes": ["ok-auth", "browser"], "text": "2. The browser has no session. The gate redirects it to Microsoft Entra ID."},
+        {"nodes": ["browser", "entra", "ok-auth"], "text": "3. The user signs in. Entra returns the code through the browser to /oauth2/callback on the same public name."},
+        {"nodes": ["ok-auth", "entra"], "text": "4. The gate exchanges the code on gate-egress. It sends the client secret and the PKCE verifier. Entra returns the ID token."},
+        {"nodes": ["ok-auth"], "text": "5 and 6. The gate checks the signature, tenant issuer, client id, nonce and expiry. Then it requires the allowed group."},
+        {"nodes": ["ok-auth", "browser"], "text": "7. The gate sets the Secure, HttpOnly __Host-ok cookie. Then it redirects the browser to the page."},
+        {"nodes": ["ok-auth", "open-knowledge"], "text": "8. Only an allowed session reaches OpenKnowledge. Each later browser request still passes through the gate."},
+        {"nodes": ["pangolin", "ok-auth"], "text": "The Pangolin option replaces Caddy, not the gate. Its ok resource has no second login."}
+      ]
+    },
+    {
+      "id": "install-flow",
+      "label": "04 Install flow",
+      "diagram": "install-flow",
+      "steps": [
+        {"nodes": ["step-provisioner", "provisioner"], "text": "1. An administrator prepares the provisioner and the boundary. The provisioner creates only bounded roles."},
+        {"nodes": ["step-env"], "text": "2. The installer sets the core names and the Entra values in .env. EC2_OPTIONS and the edge names select the options."},
+        {"nodes": ["step-secret", "stack-secret"], "text": "3. aws-host.sh secret writes <project>/env to Secrets Manager. The first boot reads it."},
+        {"nodes": ["step-deploy", "instance", "elastic-ip"], "text": "4. aws-host.sh deploy runs CloudFormation. It makes the instance and the Elastic IP."},
+        {"nodes": ["step-dns", "dns-records"], "text": "5. The DNS step reads the Elastic IP. It sets the selected A records while the host boots."},
+        {"nodes": ["step-user-data", "data-volume", "access-points"], "text": "6. User data checks the snapshot commit and mounts the data. Docker requires four durable mounts and the metadata guard."},
+        {"nodes": ["step-bootstrap", "stack-secret"], "text": "7. The bootstrap reads the secret and writes the host .env. It selects COMPOSE_FILE."},
+        {"nodes": ["step-kits"], "text": "8. The bootstrap clones the kit tags of kits.lock and checks the commits. It builds one kit at a time."},
+        {"nodes": ["step-start", "core-services"], "text": "9. The bootstrap starts the edge, the gateway, memory and the rest. It makes scoped service keys."},
+        {"nodes": ["step-verify", "instance"], "text": "10. aws-host.sh verify sends one SSM command with four internal check parts. It proves no public route."}
+      ]
+    },
+    {
+      "id": "options",
+      "label": "05 Options",
+      "diagram": "options",
+      "steps": [
+        {"nodes": ["core-services", "caddy"], "text": "The portable core needs no option. An option stays off until the installer selects it."},
+        {"nodes": ["pangolin", "caddy", "ok-auth"], "text": "EC2_OPTIONS=pangolin replaces caddy with Pangolin, Gerbil and Traefik. The ok resource still targets the gate."},
+        {"nodes": ["newt-site", "pangolin"], "text": "A home Newt site opens an outbound tunnel to Gerbil. Sites use UDP 51820, and clients use UDP 21820."},
+        {"nodes": ["porkbun-dns01", "dns-credentials", "pangolin"], "text": "Pangolin needs Porkbun DNS-01 for its wildcard certificate. Its Porkbun pair is the only DNS credential on the host."},
+        {"nodes": ["copilot", "copilot-routes", "copilot-tokens", "litellm"], "text": "EC2_OPTIONS=copilot adds the copilot service and its model routes. The Bedrock routes stay. The token files stay on the EBS data volume."},
+        {"nodes": ["dns-providers", "dns-records", "dns-credentials", "elastic-ip"], "text": "EC2_DNS_PROVIDER selects manual, porkbun, route53 or cloudflare. Each selected name gets an A record to the Elastic IP."},
+        {"nodes": ["home-tools", "credential-stores", "pi-durable", "step-kits", "provisioner"], "text": "Home lab tools stay optional: a Newt site, web search and private kit sources. Bitwarden and Vault hold optional credential copies."}
+      ]
+    }
+  ]
+}

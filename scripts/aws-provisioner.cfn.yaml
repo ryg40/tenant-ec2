@@ -78,6 +78,13 @@ Resources:
               - secretsmanager:GetSecretValue
               - secretsmanager:DescribeSecret
             Resource: !Sub arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:${Project}/*
+          - Sid: GeneratedSecretWrite
+            Effect: Allow
+            Action: secretsmanager:PutSecretValue
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:*:${AWS::AccountId}:secret:${Project}/generated-??????
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
           - Sid: Bedrock
             Effect: Allow
             Action:

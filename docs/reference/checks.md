@@ -5,7 +5,7 @@
 `scripts/check.sh` runs source checks, local container checks and offline regression tests over its own tree.
 An absent file kind gives a skip line.
 Each operations, storage, verifier and publish regression line reports a skip when its test file is absent.
-The full form has 36 result lines for this tree.
+The full form has 39 result lines for this tree.
 The pre-commit hook runs the check script on the exact staged copy, before the scan.
 
 ```sh
@@ -31,7 +31,7 @@ It neither pulls nor builds a missing check image.
 | `core edge` | The Caddy configuration and request paths, administrator range, refused paths and missing-name behavior. | Docker; local stubs replace the service targets. |
 | `render` | The host template with each `EnablePangolin` and `EnableBucket` value; security group ports and instance-role limits. | Python 3 and PyYAML. |
 | `dry run` | `scripts/aws-host.sh --dry-run` for `deploy`, `secret`, `dns` and `verify`, with the core and each option set. | Python 3 and command stubs. |
-| `secret` | Secret filtering, both Pangolin first-boot exceptions, bootstrap environment rendering and the verifier's file-set test. | Python 3 and an AWS stub. No secret-store write. |
+| `secret` | Secret filtering, generated-key recovery and write-back, presence checks, first-boot exceptions, environment rendering and the verifier's file-set test. | Python 3 and an AWS stub. No secret-store write. |
 | `providers` | DNS plans, creation, correction, repeat runs, refused credentials and private credential files for every provider. | Python 3 and command stubs with fake zones. |
 | Bootstrap dry run | `scripts/host-bootstrap.sh --dry-run` with a fixture in place of `/`. | Python 3, `envsubst` and command stubs. |
 | `environment forms` | Four lines, one per file set. Shared form tests, safe messages, first-boot exceptions and refusal before a secret write. | Python 3, edge shell tools and `envsubst`; an AWS stub records writes. |
@@ -42,7 +42,10 @@ It neither pulls nor builds a missing check image.
 | `selftest scripts/security-review.sh` | The advisory reader's fixtures, not a security review. | The script's `--self-test` command. The printed pass line is required because the exit status is always zero. |
 | `loaders` | Claude Code and Pi load the review skill in a new clone. | Git, Node.js, Claude Code and the Pi package. A local API stub replaces the model provider. |
 | `selftest scripts/build-diagrams.py` | Invalid scene geometry and binding fixtures. | Python 3 and `--self-test`; no npm install. |
+| `selftest scripts/dns-migration.py` | The helper of the [DNS migration](dns-migration.md): a missing or empty plan, host records, preserved TTLs, the zone comparison, record-type probes, the gate before the switch and the zone rebuild. | Python 3 and `--self-test`; fixtures of its own and no network call. |
+| `selftest scripts/build-architecture-html.py` | The builder of the interactive page: invalid graph fixtures, a stable build, the layout, the edge routes and the compare step. | Python 3 and `--selftest`; fixtures of its own and no network call. |
 | `scenes` | Excalidraw loads each scene and compares its SVG export. | Python Playwright with Chromium, npm and the pinned packages. |
+| `architecture` | `docs/architecture.html` is the build of `docs/diagrams/architecture-graph.json`. | Python 3 and `--check`; no network call, also with `CHECK_OFFLINE=1`. |
 | `local run` | The real gate image with a stub identity provider and upstream. | Docker, Python 3 and `ok-auth/local-run.sh --upstream stub`. |
 | `operations regression` | The templates, the IAM limits, the journal routing, the cursor, the rotation, the agent files and the bootstrap switch. | `python3 -I scripts/test-operations.py`; needs PyYAML. No network call. |
 | `storage regression` | The order of the first boot, a missing or late mount, the checks at a restart, the fstab paths, the unit syntax and the Git ownership. It runs the Compose command of the bootstrap for each of the four file sets. | `python3 -I scripts/test-storage.py`; needs PyYAML and the systemd analysis tools. The fixture with numeric ids needs root. No service and no mount runs. |
@@ -125,6 +128,21 @@ The check prints no captured dry run output.
 A dry run proves neither a real build nor a real service start.
 The [host boot reference](host-boot.md#known-limits) keeps those limits.
 
+## Generated-key checks
+
+The `secret` line also runs the generated-key regression with the same AWS stub.
+The stub records reads and writes for both secrets. It refuses a secret value in an argument or a payload without mode 0600.
+The fixtures exercise missing and empty generated storage, a repeat with an empty host file, and recovery from the host file.
+They check one JSON write with only the three names and no new version when content stays unchanged.
+A failed put emits synthetic values on both streams. The production helper suppresses them and bootstrap continues with its environment file intact.
+The checks compare captured output and stub logs with the synthetic values. A match fails without printing the value.
+The deploy-script cases check empty-name filling, explicit-value preservation, name-only status and absent-name verification failure.
+On an older deployment without the generated secret, `verify` skips this check until the owner applies the host stack update.
+The template tests require an exact resource reference for the write grant and unchanged read-only environment actions.
+The operations regression checks the exact generated-secret boundary grant alongside the existing S3 grants.
+
+Not verified: the live template and boundary apply, or the first write-back on a host. No stub proves effective AWS permissions.
+
 ## Environment forms
 
 Each `environment forms <file set>` line runs `scripts/test-env-forms.py` for its options.
@@ -186,6 +204,12 @@ The [architecture page](../architecture.md#rebuild-and-check) gives tool require
 The check script runs both commands as `selftest scripts/build-diagrams.py` and `scenes docs/diagrams/`.
 Offline mode skips `scenes` unless `CHECK_DIAGRAM_NPM_DIR` supplies the pinned packages.
 The scene line also skips without Python Playwright with Chromium or without npm.
+
+Run `python3 -I scripts/build-architecture-html.py --selftest` for the fixtures of the interactive page.
+Run `python3 -I scripts/build-architecture-html.py --check` to compare the committed page with a new build of its source.
+The check script runs both commands as `selftest scripts/build-architecture-html.py` and `architecture docs/architecture.html`.
+Both need Python 3 only, so offline mode runs them too.
+The [architecture page](../architecture.md#interactive-page) gives the build command.
 
 ## Hooks and fallback tools
 

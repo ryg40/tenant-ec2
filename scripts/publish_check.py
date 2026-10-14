@@ -46,6 +46,9 @@ PUBLISH = (
     "docs/install.md", "docs/architecture.md", "docs/entra.md", "docs/security-review.md",
     "docs/reference/checks.md", "docs/reference/compose-stack.md", "docs/reference/deploy-script.md",
     "docs/reference/host-boot.md", "docs/reference/host-template.md",
+    "docs/reference/host-snapshot-move.md",
+    "docs/reference/dns-migration.md",
+    "docs/reference/host-domain-move.md",
     "docs/options/README.md", "docs/options/copilot.md", "docs/options/dns.md", "docs/options/home-lab.md",
     "docs/options/pangolin.md",
     "docs/diagrams/01-aws-core.excalidraw", "docs/diagrams/01-aws-core.json", "docs/diagrams/01-aws-core.svg",
@@ -55,6 +58,7 @@ PUBLISH = (
     "docs/diagrams/04-install-flow.excalidraw", "docs/diagrams/04-install-flow.json",
     "docs/diagrams/04-install-flow.svg",
     "docs/diagrams/05-options.excalidraw", "docs/diagrams/05-options.json", "docs/diagrams/05-options.svg",
+    "docs/diagrams/architecture-graph.json", "docs/architecture.html",
 )
 # Directory rules: (directory, technical excludes relative to that directory).
 # A rule publishes each tracked file under the directory. Private-copy exclusions belong
