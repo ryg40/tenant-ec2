@@ -20,6 +20,34 @@ scripts/aws-host.sh --help
 | `dns --plan` | Reads the Elastic IP from the stack and prints the record set. It changes nothing and calls no provider. |
 | `verify` | Shows stack status, then runs `docker compose ps`, the file set check, the service list and `scripts/verify-deployed.py` on the host through SSM. No model request runs. |
 
+## Mac dispatch
+
+Set `EC2_VARIANT=macos` for the separate [Mac install flow](../variants.md#prepare-and-install).
+The command table above and later Linux details describe homelab only.
+Mac uses `<Project>-macos-allocation` and `<Project>-macos-host`, with private state under `.local/macos/`.
+Its secrets are `<Project>/macos/env` and `<Project>/macos/generated`, not the homelab namespace.
+Account, disk and memory scope come from the stack-written machine document, never the service secret.
+
+Mac adds `host-allocate`, `host-release`, `stop`, `start`, `session`, `tunnel` and `ssh`.
+Live lifecycle, secret, deployment and access commands require `--apply`; dry runs make no AWS call or mutation.
+`outputs --write` saves private output values. Ordinary output reports names, not values.
+`dns` is refused for Mac, including its plan and dry-run forms.
+The optional Mac boundary and session role must match the admitted memory scope before deployment or access.
+
+`verify` uses `AWS-RunShellScript`, validates the protected machine document and switches to its PIN account.
+It invokes the deployed snapshot verifier with `--repo /opt/<project>/macos/snapshot --project <project>`, which selects `/etc/<project>/machine.json` independently of the directory name.
+It also passes `--variant macos --engine podman --file-set compose.macos.yaml --edge-names ''`.
+Without `--project`, the repository directory name remains the default; homelab verification stays unchanged.
+The verifier supplies the bootstrap's isolated Podman environment, runtime Compose path and private service environment path.
+It checks the four selected services; the dormant agent is not a successful fifth-service check.
+It requires the exact `COMPOSE_FILE` and matching runtime copy and makes no model or memory request.
+The wrapper withholds remote output; approved host-side use prints only fixed check labels.
+
+The Mac secret writer fixes `COMPOSE_FILE=compose.macos.yaml`; bootstrap requires that exact value and renders it into the private service environment.
+Do not weaken the comparison or infer a successful deployment from parser tests.
+Not verified: the live Mac command path, session restrictions and complete service hand-over.
+See [Mac template guards](host-template-macos.md#lifecycle-guards) and [cost and shutdown](../variants.md#cost-and-shutdown).
+
 ## Settings and options
 
 The default environment file is `.env` of this clone.

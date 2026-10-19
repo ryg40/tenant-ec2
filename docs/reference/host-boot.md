@@ -2,6 +2,40 @@
 
 [Install](../install.md) | [Host template](host-template.md) | [Compose stack](compose-stack.md) | [Move to a later snapshot](host-snapshot-move.md) | [Move under a new domain](host-domain-move.md)
 
+The Linux steps on this page apply to `homelab` only; the Mac path is described next.
+
+## Mac bootstrap
+
+Mac user data uses `ec2-macos-init`, not Linux cloud-init or systemd.
+It clones the same pinned portable snapshot, writes the protected deployment machine document and fetches private service JSON.
+`scripts/host-bootstrap-macos.sh` is a zsh entrypoint. Never parse it with Bash shellcheck or invoke it through `sh`.
+Its forms mode checks machine data against the stage person and host admission before accepting separate service settings.
+
+The native path verifies the EBS volume identity before APFS formatting or mounting at `/Volumes/data`.
+It creates and reads back the PIN account before disabling default interactive accounts.
+The generated initial password stays in `<Project>/macos/generated`; the owner changes it at first login.
+It installs pinned tools, initializes the explicitly mounted PIN-owned Podman machine and builds selected kit tags without source patches.
+A Linux guest holds named application volumes. No developer home, personal credentials directory or engine socket enters application mounts.
+The root launchd job starts only after initial success and resumes the existing disk and VM without resetting either.
+The temporary credential bridge atomically refreshes guest credential files; it does not freeze access keys in Compose environment variables.
+
+The tracked candidate mount policy is distinct from `/etc/<project>/machine.json`, which contains deployment inputs.
+The runtime Compose copy is `/Volumes/data/runtime/compose.macos.yaml`; private service settings are `/Volumes/data/service.env`.
+Bootstrap requires `COMPOSE_FILE=compose.macos.yaml` from `<Project>/macos/env` and preserves that fixed setting in the private service environment.
+The verifier runs as the PIN account from `/opt/<project>/macos/snapshot`, with `--project <project>` selecting `/etc/<project>/machine.json`.
+It keeps the same provider, connection, XDG paths and Compose provider.
+Before runtime setup and each resume, `snapshot_access` rejects symbolic links, hard-linked files and non-root ownership, then removes snapshot ACLs.
+ACLs are access control lists that can grant rights beyond file mode bits.
+It sets project and Mac parents, snapshot directories and executable files to `0755`; other snapshot files use `0644`.
+Root owns these paths; the PIN account can read and traverse them but cannot write without sudo.
+Git metadata stays private at `0700` for directories and executables and `0600` for other files; secret staging stays unchanged.
+The agent stays behind `agentcore-pending` until the compatible AgentCore kit release and pin exist.
+
+Not verified: native account/password behavior, APFS matching, applehv startup, credential refresh, ARM64 builds or headless reboot recovery.
+See [Mac runtime qualification](../../config/macos/README.md) and [Variants](../variants.md) for exact interfaces and sources.
+
+## Homelab bootstrap
+
 Three scripts bring a new instance to a running Compose stack.
 User data writes stack values, clones the portable snapshot, checks its commit and starts `scripts/host-userdata.sh`.
 That script prepares the host and starts `scripts/host-bootstrap.sh` with the stack values file.

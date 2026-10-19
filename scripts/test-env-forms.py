@@ -36,6 +36,59 @@ def fixture(options):
     return values
 
 
+def macos_forms():
+    root = Path(tempfile.mkdtemp(prefix="check-macos-forms-"))
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    import shutil
+    for name in ("sh", "dirname", "sed", "python3"):
+        (bin_dir / name).symlink_to(shutil.which(name))
+    calls = root / "calls"
+    for name in ("aws", "curl", "docker", "podman", "mktemp"):
+        target = bin_dir / name
+        target.write_text("#!/bin/sh\nprintf 'forbidden\\n' >>" + str(calls) + "\nexit 97\n")
+        target.chmod(0o755)
+    values = fixture("")
+    values["EC2_VARIANT"] = "macos"
+    values["EC2_EDGE_NAMES"] = ""
+    values.update(EC2_MACOS_MEMORY_STAGE="dev", EC2_MACOS_DEVELOPER_PIN="XYZ1000", EC2_MACOS_PERSON="alice", EC2_MACOS_AGENT="macos-agent",
+                  EC2_MACOS_PROPOSAL_PROJECT="example-project", EC2_MACOS_RUNTIME_LOCK="config/macos/runtime.lock.json")
+    for name in ("EC2_OK_ENTRA_TENANT_ID", "EC2_OK_ENTRA_GROUP_ID", "EC2_OK_OIDC_CLIENT_ID"):
+        values[name] = "abcdefab-1234-1234-1234-abcdefabcdef"
+    for name in values:
+        if name in ("EC2_DOMAIN", "EC2_ADMIN_CIDR", "EC2_ACME_EMAIL", "EC2_GERBIL_BASE_ENDPOINT",
+                    "EC2_PI_DURABLE_OPENVIKING_API_KEY", "EC2_BUCKET") or name.startswith(("EC2_OPENVIKING_", "EC2_PANGOLIN_", "EC2_COPILOT_")):
+            values[name] = ""
+    environment = {"PATH": str(bin_dir), "HOME": str(root), "TMPDIR": str(root)}
+    def check(data, ok):
+        result = subprocess.run(["sh", "scripts/aws-host.sh", "secret", "--dry-run"], cwd=REPO,
+                                env=environment, input="".join(k + "=" + v + "\n" for k, v in data.items()),
+                                capture_output=True, text=True, timeout=20)
+        require((result.returncode == 0) == ok, "macos forms: " + result.stdout + result.stderr)
+        require("forms-fixture-value-7q9z" not in result.stdout + result.stderr, "macos form prints a credential")
+        require(not calls.exists(), "macos dry form calls a provider or temporary-file tool")
+    check(values, True)
+    for name, value in (("EC2_VARIANT", "unknown"), ("EC2_OPTIONS", "copilot"), ("EC2_OPTIONS", "pangolin"),
+                        ("EC2_DOMAIN", "forms-fixture.test"), ("EC2_EDGE_NAMES", "ok"), ("EC2_DNS_PROVIDER", "porkbun"),
+                        ("EC2_OPENVIKING_ROOT_API_KEY", "forms-fixture-value-7q9z"),
+                        ("EC2_PI_DURABLE_OPENVIKING_API_KEY", "forms-fixture-value-7q9z"),
+                        ("EC2_PI_DURABLE_MODEL", "copilot/luna"), ("EC2_PI_DURABLE_THINKING", "high"),
+                        ("EC2_PI_DURABLE_WEB_SEARCH", "mcp"), ("AWS_SECRET_ACCESS_KEY", "forms-fixture-value-7q9z"),
+                        ("EC2_SSH_PRIVATE_KEY", "forms-fixture-value-7q9z"),
+                        ("EC2_MACOS_MEMORY_STAGE", "invalid"), ("EC2_MACOS_DEVELOPER_PIN", "xyz1000"),
+                        ("EC2_MACOS_PODMAN_PROVIDER", "libkrun"),
+                        ("EC2_MACOS_PODMAN_CPUS", "0"), ("EC2_MACOS_PODMAN_CPUS", "9"),
+                        ("EC2_MACOS_PODMAN_CPUS", "4.0"), ("EC2_MACOS_PODMAN_MEMORY_MIB", "1023"),
+                        ("EC2_MACOS_PODMAN_MEMORY_MIB", "16385"), ("EC2_MACOS_PODMAN_DISK_GIB", "19"),
+                        ("EC2_MACOS_PODMAN_DISK_GIB", "1025")):
+        check(dict(values, **{name: value}), False)
+    for name, value in (("EC2_MACOS_PODMAN_CPUS", "1"), ("EC2_MACOS_PODMAN_CPUS", "8"),
+                        ("EC2_MACOS_PODMAN_MEMORY_MIB", "1024"), ("EC2_MACOS_PODMAN_MEMORY_MIB", "16384"),
+                        ("EC2_MACOS_PODMAN_DISK_GIB", "20"), ("EC2_MACOS_PODMAN_DISK_GIB", "1024")):
+        check(dict(values, **{name: value}), True)
+    print("environment forms: pass (macos selected services and excluded settings)")
+
+
 def main(options):
     # Every invocation has its own directory. Keep it for a failed-check inspection.
     root = Path(tempfile.mkdtemp(prefix="check-env-forms-"))
@@ -234,5 +287,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     try:
         main(args.options)
+        macos_forms()
     except (AssertionError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit("environment forms: FAIL: " + str(error))

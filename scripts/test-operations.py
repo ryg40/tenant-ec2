@@ -148,7 +148,34 @@ class OperationsTests(unittest.TestCase):
             if resource["Type"] == "AWS::IAM::ManagedPolicy":
                 size = len(json.dumps(resource["Properties"]["PolicyDocument"], separators=(",", ":")))
                 self.assertLess(size, 6144)
-        self.assertEqual(len(resources["Provisioner"]["Properties"]["ManagedPolicyArns"]), 2)
+        attachments = resources["Provisioner"]["Properties"]["ManagedPolicyArns"]
+        self.assertEqual(attachments[:2], [{"Ref": "ProvisionerPolicy"}, {"Ref": "OperationsPolicy"}])
+        self.assertEqual(attachments[2:], [{"If": ["HasMacos", {"Ref": "MacosProvisionerDeny"}, {"Ref": "AWS::NoValue"}]}])
+
+    def test_macos_is_additive_and_admin_owned(self):
+        resources = self.provisioner["Resources"]
+        self.assertEqual(self.provisioner["Parameters"]["EnableMacos"]["Default"], "false")
+        for name in ("MacosBoundary", "MacosProvisionerPolicy", "MacosSessionRole", "MacosSessionBoundary", "MacosProvisionerDeny"):
+            self.assertEqual(resources[name]["Condition"], "HasMacos")
+        self.assertEqual(resources["MacosGuardPolicy"]["Properties"]["Users"], [{"Ref": "Provisioner"}])
+        self.assertEqual(resources["MacosProvisionerPolicy"]["Properties"]["Users"], [{"Ref": "Provisioner"}])
+        self.assertNotIn("Users", resources["MacosBoundary"]["Properties"])
+        session = resources["MacosSessionRole"]["Properties"]
+        self.assertEqual(session["PermissionsBoundary"], {"Ref": "MacosSessionBoundary"})
+        self.assertEqual(session["ManagedPolicyArns"], [{"Ref": "MacosSessionBoundary"}])
+        self.assertEqual(session["AssumeRolePolicyDocument"]["Statement"][0]["Principal"], {"AWS": {"GetAtt": "Provisioner.Arn"}})
+        deny = resources["MacosProvisionerDeny"]["Properties"]["PolicyDocument"]
+        self.assertTrue(all(item["Effect"] == "Deny" for item in deny["Statement"]))
+        self.assertEqual(len(resources["Provisioner"]["Properties"]["ManagedPolicyArns"]) +
+                         sum({"Ref": "Provisioner"} in resource.get("Properties", {}).get("Users", [])
+                             for resource in resources.values()), 5)
+        unchanged = resources["ProvisionerPolicy"]["Properties"]["PolicyDocument"]
+        self.assertFalse(any(action.startswith("bedrock-agentcore:") for item in unchanged["Statement"] for action in actions(item)))
+        self.assertFalse(any(action in {"iam:CreatePolicy", "iam:CreatePolicyVersion", "iam:SetDefaultPolicyVersion", "iam:DeleteRolePermissionsBoundary"}
+                             for item in unchanged["Statement"] for action in actions(item)))
+        compute = statements(unchanged)["Compute"]
+        self.assertIn("ec2:*", actions(compute))
+        self.assertEqual(compute["Condition"]["StringEquals"]["aws:RequestedRegion"], {"Ref": "Regions"})
 
     def test_export_restart_cursor_routing_and_failure(self):
         with tempfile.TemporaryDirectory() as directory:

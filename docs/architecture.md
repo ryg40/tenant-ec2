@@ -1,6 +1,12 @@
 # Architecture
 
-The diagrams show the portable core and its options, not a deployed host.
+The diagrams show the homelab portable core and its options, not a deployed host.
+The [Mac variant](variants.md) is not drawn in these five diagrams.
+It separates Dedicated Host allocation from the runtime stack and uses encrypted EBS instead of EFS.
+A PIN-owned Podman Linux guest runs four services; only the Entra gate publishes loopback port 4180 through an operator tunnel.
+A temporary instance-role credential bridge replaces Linux metadata delivery inside containers.
+Stage host admission supplies memory scope, but pi-durable stays disabled until the compatible AgentCore kit release and shared pin exist.
+Not verified: applehv, the credential bridge, account transition or reboot on the selected Mac AMI.
 Each image has an editable Excalidraw scene and a reviewed JSON source beside it.
 Arrows show requests or dependencies; frames group related parts.
 
@@ -62,6 +68,12 @@ The instance role reads the stack secret and calls Bedrock; `EnableBucket` optio
 The access points enforce `10001:10001` for OpenKnowledge, `1101:1101` for OpenViking and `1102:1102` for shared files.
 `EnableOperations` separately adds daily data-volume snapshots, host logs and a billing alarm with its topic.
 The administrator owns the snapshot role `bootstrap-<Project>-dlm`; the provisioner cannot change that role.
+
+The [memory stacks](memory-stack.md) are administrator-owned stacks beside the bootstrap stack, one each for `dev`, `test` and `prod`.
+Each `bootstrap-${Project}-memory-${Stage}` stack owns an AgentCore memory, an optional file bucket, a permissions boundary and stage users.
+The stage YAML names the people and project access lists; bucket prefixes follow the memory namespaces.
+These stacks grant no AgentCore permission to the provisioner or host role and do not replace OpenViking.
+The five diagrams show the host core and its options, not these separate memory stacks.
 
 ## Core services
 

@@ -1,0 +1,33 @@
+schemaVersion: 1
+stage: dev
+region: us-east-1
+memory:
+  eventExpiryDays: 7
+bucket:
+  enabled: true
+service:
+  submit: true
+  workerRead: true
+hostRoles: []
+people:
+  - actorId: alice
+    pin: XYZ1000
+    status: active
+  - actorId: bruno
+    pin: XYZ1001
+    status: active
+  - actorId: chen
+    pin: XYZ1002
+    status: active
+  - actorId: dana
+    pin: XYZ1003
+    status: active
+projects:
+  - projectId: example-project
+    maintainers: [alice]
+    members: [alice, chen, dana]
+    deleters: []
+  - projectId: example-site
+    maintainers: [bruno]
+    members: [bruno, chen]
+    deleters: []

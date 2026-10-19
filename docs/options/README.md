@@ -2,7 +2,11 @@
 
 [Front page](../../README.md) | [Core install](../install.md) | [Architecture](../architecture.md)
 
-The core needs no option.
+These options belong to `EC2_VARIANT=homelab` only.
+The [Mac variant](../variants.md) is a standalone design, not another option or overlay.
+It requires empty `EC2_OPTIONS` and `EC2_EDGE_NAMES` and has no public DNS command.
+
+The homelab core needs no option.
 `EC2_OPTIONS` accepts a comma-separated list with no blanks.
 The known names are `pangolin` and `copilot`; the default is empty.
 An unknown name stops the scripts.
@@ -47,4 +51,5 @@ The sample environment file groups values by purpose:
 
 The [deploy reference](../reference/deploy-script.md) explains secret filtering.
 The [Compose reference](../reference/compose-stack.md) lists the four file sets.
-AgentCore and OpenKnowledge model calls are not options in this install kit.
+AgentCore is not a homelab option; the Mac design uses separate stage admission and a pending compatible agent kit.
+OpenKnowledge model calls remain outside both designs.

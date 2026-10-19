@@ -22,6 +22,49 @@ Parameters:
     Default: us-east-1
     Description: The regions where the provisioner uses EC2, EFS and SSM sessions.
 
+  EnableMacos:
+    Type: String
+    Default: "false"
+    AllowedValues: ["false", "true"]
+    Description: The administrator opts in to the separate Mac boundary and operator rights.
+  MacosMemoryArn:
+    Type: String
+    Default: ""
+    NoEcho: true
+    AllowedPattern: '^$|^arn:aws(-[a-z]+)*:bedrock-agentcore:[a-z]{2}(-[a-z]+)+-[0-9]+:[0-9]{12}:memory/[A-Za-z][A-Za-z0-9_-]{0,127}$'
+  MacosMemoryBucketName:
+    Type: String
+    Default: ""
+    NoEcho: true
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+  MacosAgentActorId:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]{0,63}$'
+  MacosProposalProject:
+    Type: String
+    Default: ""
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]{0,63}$'
+
+Rules:
+  MacosScopeRequired:
+    RuleCondition: !Equals [!Ref EnableMacos, "true"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref MacosMemoryArn, ""]]
+        AssertDescription: Mac mode needs a reviewed memory ARN.
+      - Assert: !Not [!Equals [!Ref MacosMemoryBucketName, ""]]
+        AssertDescription: Mac mode needs a reviewed memory bucket.
+      - Assert: !Not [!Equals [!Ref MacosAgentActorId, ""]]
+        AssertDescription: Mac mode needs a separate agent actor.
+      - Assert: !Not [!Equals [!Ref MacosProposalProject, ""]]
+        AssertDescription: Mac mode needs a proposal project.
+
+Conditions:
+  HasMacos: !And
+    - !Equals [!Ref EnableMacos, "true"]
+    - !Not [!Equals [!Ref MacosMemoryArn, ""]]
+    - !Not [!Equals [!Ref MacosMemoryBucketName, ""]]
+
 Resources:
   # The most rights that a role of the stack can have: the instance role of the host.
   Boundary:
@@ -242,6 +285,7 @@ Resources:
               - cloudformation:ListStacks
             Resource: "*"
           # EC2 and EFS name a resource by an id, so a name prefix cannot limit them.
+          # Existing ec2:* already covers AllocateHosts, ReleaseHosts, ModifyHosts and DescribeHosts.
           - Sid: Compute
             Effect: Allow
             Action:
@@ -507,6 +551,274 @@ Resources:
               - sns:ListSubscriptionsByTopic
             Resource: !Sub arn:${AWS::Partition}:sns:us-east-1:${AWS::AccountId}:${Project}-alarm
 
+  # The guard is always attached. The optional Mac allow never defeats these denies.
+  MacosGuardPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-macos-guard
+      Users: [!Ref Provisioner]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # The session role shares the project prefix, but only the administrator manages it.
+          - Sid: MacosSessionRoleImmutable
+            Effect: Deny
+            Action: iam:*
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-macos-session
+          - Sid: MacosWrongBoundary
+            Effect: Deny
+            Action: [iam:CreateRole, iam:PutRolePermissionsBoundary, iam:AttachRolePolicy, iam:DetachRolePolicy, iam:PutRolePolicy, iam:DeleteRolePolicy]
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-macos-role
+            Condition:
+              StringNotEquals:
+                iam:PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${Project}-macos-boundary
+          - Sid: MacosBoundaryRemoval
+            Effect: Deny
+            Action: iam:DeleteRolePermissionsBoundary
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-macos-role
+          - !If
+            - HasMacos
+            - !Ref AWS::NoValue
+            - Sid: MacosDisabled
+              Effect: Deny
+              Action: iam:*
+              Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-macos-role
+
+  # A deny on the original user closes its broad legacy session path for Mac targets.
+  # The user assumes the separate session role for Mac shell, SSH, and local-port tunnels.
+  # SendCommand recovery and existing homelab sessions are unchanged.
+  MacosProvisionerDeny:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: HasMacos
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-macos-provisioner-deny
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: MacosDirectSession
+            Effect: Deny
+            Action: ssm:StartSession
+            Resource: !Sub arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*
+            Condition:
+              StringEquals:
+                ssm:resourceTag/Variant: macos
+
+  # Session Manager: sample IAM policies and own-session tags for assumed roles.
+  # https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-restrict-access-quickstart.html
+  # https://docs.aws.amazon.com/systems-manager/latest/userguide/getting-started-restrict-access-examples.html
+  # Start a session: SSH and local port forwarding. No remote-host forwarding document is allowed.
+  # https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html
+  # The same policy is the grant and its ceiling. It grants no host runtime or management right.
+  MacosSessionBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: HasMacos
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-macos-session-boundary
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: MacosSessionTarget
+            Effect: Allow
+            Action: ssm:StartSession
+            Resource: !Sub arn:${AWS::Partition}:ec2:*:${AWS::AccountId}:instance/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                ssm:resourceTag/Variant: macos
+                ssm:resourceTag/Project: !Ref Project
+              # SSM evaluates this check on the target too, including an omitted/default document.
+              BoolIfExists:
+                ssm:SessionDocumentAccessCheck: "true"
+          - Sid: MacosSessionDocuments
+            Effect: Allow
+            Action: ssm:StartSession
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:document/${Project}-macos-session
+              - !Sub arn:${AWS::Partition}:ssm:*::document/AWS-StartPortForwardingSession
+              - !Sub arn:${AWS::Partition}:ssm:*::document/AWS-StartSSHSession
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+              Bool:
+                ssm:SessionDocumentAccessCheck: "true"
+          - Sid: MacosOwnSession
+            Effect: Allow
+            Action: [ssm:ResumeSession, ssm:TerminateSession]
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:session/*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+                ssm:resourceTag/aws:ssmmessages:session-id: '${aws:userid}'
+          - Sid: MacosSessionChannel
+            Effect: Allow
+            Action: ssmmessages:OpenDataChannel
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:session/${!aws:userid}-*
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+
+  MacosSessionRole:
+    Type: AWS::IAM::Role
+    Condition: HasMacos
+    Properties:
+      RoleName: !Sub ${Project}-macos-session
+      MaxSessionDuration: 3600
+      PermissionsBoundary: !Ref MacosSessionBoundary
+      ManagedPolicyArns: [!Ref MacosSessionBoundary]
+      # AssumeRole, Permissions: naming a same-account user directly in this trust policy
+      # grants assumption without changing the user's existing identity policy.
+      # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html
+      # No sts:TagSession: the caller cannot override Run As through a session tag.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {AWS: !GetAtt Provisioner.Arn}
+            Action: sts:AssumeRole
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+        - {Key: Variant, Value: macos}
+
+  MacosBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: HasMacos
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-macos-boundary
+      Description: The separate ceiling of the Mac runtime role. Only an administrator changes it.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SsmAgent
+            Effect: Allow
+            Action:
+              - ssm:DescribeAssociation
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+              - ssm:GetManifest
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutInventory
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+            Resource: "*"
+          - Sid: EnvSecretRead
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret]
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Project}/macos/env-??????
+          - Sid: GeneratedSecretWrite
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue, secretsmanager:DescribeSecret, secretsmanager:PutSecretValue]
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Project}/macos/generated-??????
+          - Sid: BedrockLuna
+            Effect: Allow
+            Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+            Resource:
+              - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/us.openai.gpt-6-luna
+              - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/openai.gpt-6-luna
+          - Sid: BedrockEmbed
+            Effect: Allow
+            Action: bedrock:InvokeModel
+            Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0
+          - Sid: MemoryRead
+            Effect: Allow
+            Action: [bedrock-agentcore:RetrieveMemoryRecords, bedrock-agentcore:ListMemoryRecords, bedrock-agentcore:GetMemoryRecord]
+            Resource: !Ref MacosMemoryArn
+            Condition:
+              StringLike:
+                bedrock-agentcore:namespace: [/shared/*, /project/*/shared/*]
+          - Sid: MemoryWrite
+            Effect: Allow
+            Action: bedrock-agentcore:BatchCreateMemoryRecords
+            Resource: !Ref MacosMemoryArn
+            Condition:
+              ForAllValues:StringLike:
+                bedrock-agentcore:namespace: [!Sub '/project/${MacosProposalProject}/proposals/${MacosAgentActorId}/*']
+              "Null":
+                bedrock-agentcore:namespace: "false"
+          - Sid: BucketList
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::${MacosMemoryBucketName}
+            Condition:
+              StringLike:
+                s3:prefix: [projects/*, !Sub 'users/${MacosAgentActorId}/*']
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+          - Sid: BucketRead
+            Effect: Allow
+            Action: s3:GetObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::${MacosMemoryBucketName}/projects/*
+            Condition:
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+          - Sid: BucketWrite
+            Effect: Allow
+            Action: [s3:PutObject, s3:AbortMultipartUpload]
+            Resource: !Sub arn:${AWS::Partition}:s3:::${MacosMemoryBucketName}/users/${MacosAgentActorId}/*
+            Condition:
+              StringEquals:
+                s3:ResourceAccount: !Ref AWS::AccountId
+
+  MacosProvisionerPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: HasMacos
+    Properties:
+      ManagedPolicyName: !Sub ${Project}-macos-provisioner
+      Users: [!Ref Provisioner]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: MacosBootstrapStackRead
+            Effect: Allow
+            Action: cloudformation:DescribeStacks
+            Resource:
+              - !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/bootstrap-${Project}/*
+              - !Sub arn:${AWS::Partition}:cloudformation:*:${AWS::AccountId}:stack/bootstrap-${Project}-memory-*/*
+          - Sid: MacosRoleWithBoundary
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+            Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Project}-macos-role
+            Condition:
+              StringEquals:
+                iam:PermissionsBoundary: !Ref MacosBoundary
+          - Sid: MacosSessionDocument
+            Effect: Allow
+            Action:
+              - ssm:CreateDocument
+              - ssm:UpdateDocument
+              - ssm:UpdateDocumentDefaultVersion
+              - ssm:DeleteDocument
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+              - ssm:ListDocumentVersions
+              - ssm:AddTagsToResource
+              - ssm:RemoveTagsFromResource
+              - ssm:ListTagsForResource
+            Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:document/${Project}-macos-session
+            Condition:
+              StringEquals:
+                aws:RequestedRegion: !Ref Regions
+
   Provisioner:
     Type: AWS::IAM::User
     Properties:
@@ -514,6 +826,7 @@ Resources:
       ManagedPolicyArns:
         - !Ref ProvisionerPolicy
         - !Ref OperationsPolicy
+        - !If [HasMacos, !Ref MacosProvisionerDeny, !Ref AWS::NoValue]
       Tags:
         - Key: Project
           Value: !Ref Project
@@ -528,3 +841,11 @@ Outputs:
   SnapshotRoleArn:
     Description: The administrator-owned execution role for the daily snapshot policy.
     Value: !GetAtt SnapshotRole.Arn
+  MacosBoundaryArn:
+    Condition: HasMacos
+    Description: The administrator-approved ceiling of the Mac runtime role.
+    Value: !Ref MacosBoundary
+  MacosSessionRoleArn:
+    Condition: HasMacos
+    Description: Assume this role for the approved Mac shell, SSH, and local-port session documents.
+    Value: !GetAtt MacosSessionRole.Arn

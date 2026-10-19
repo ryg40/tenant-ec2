@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "status": "qualification-required",
+  "podman": {
+    "version": "5.6.2",
+    "url": "https://github.com/podman-container-tools/podman/releases/download/v5.6.2/podman-installer-macos-arm64.pkg",
+    "sha256": "bf45bea14045881732fc58ff49a472a40c922ad557279a0fb5497db6ebf57a1b",
+    "checksumSource": "https://api.github.com/repos/podman-container-tools/podman/releases/tags/v5.6.2",
+    "signatureCheck": "pkgutil --check-signature; spctl --assess --type install",
+    "signatureStatus": "Not verified: Apple installer signature and notarization on the selected AMI."
+  },
+  "machine": {
+    "provider": "applehv",
+    "version": "5.6.2",
+    "url": "https://github.com/podman-container-tools/podman-machine-os/releases/download/v5.6.2/podman-machine.aarch64.applehv.raw.zst",
+    "sha256": "b8d8609ac44174d2d0c8fb1aa5266bc409c142ed66e33d333e446fa02d9a0a6b",
+    "checksumSource": "https://api.github.com/repos/podman-container-tools/podman-machine-os/releases/tags/v5.6.2",
+    "cpus": 4,
+    "memoryMiB": 8192,
+    "diskGiB": 80
+  },
+  "compose": {
+    "version": "2.39.4",
+    "url": "https://github.com/docker/compose/releases/download/v2.39.4/docker-compose-darwin-aarch64",
+    "sha256": "718d09670f2017cdb7bfabccebdbf00b3f971a7e560afc13512b4334796e3cf0",
+    "checksumSource": "https://api.github.com/repos/docker/compose/releases/tags/v2.39.4"
+  },
+  "piDurable": {
+    "profile": "agentcore-pending",
+    "enabled": false,
+    "reason": "An approved AgentCore adapter release and shared kit pin are required. No guessed backend variables are supplied."
+  },
+  "qualification": [
+    "Secure account password input without arguments or logs",
+    "Verified EBS identity and APFS durable mount",
+    "Installer signature and provider startup without GUI login",
+    "Machine mount readback and host-to-guest UID mapping",
+    "ARM64 kit builds and named-volume initialization",
+    "Atomic credential replacement across the VM mount",
+    "Entra localhost callback and WebSockets",
+    "PIN account recovery, password policy, screen lock and reboot"
+  ]
+}

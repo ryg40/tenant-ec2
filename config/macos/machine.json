@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "tenant-ec2-macos",
+  "provider": "applehv",
+  "cpus": 4,
+  "memoryMiB": 8192,
+  "diskGiB": 80,
+  "rootful": false,
+  "dataRoot": "/Volumes/data",
+  "machineData": "/Volumes/data/podman",
+  "mounts": [
+    {"source": "/Volumes/data/runtime", "target": "/run/tenant-ec2", "readOnly": true},
+    {"source": "/Volumes/data/sources", "target": "/srv/sources", "readOnly": true}
+  ],
+  "services": ["litellm", "litellm-db", "open-knowledge", "ok-auth"],
+  "profiles": [],
+  "personalKey": "none"
+}

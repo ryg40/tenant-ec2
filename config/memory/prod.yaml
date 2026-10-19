@@ -1,0 +1,21 @@
+# replace the example people
+schemaVersion: 1
+stage: prod
+region: us-east-1
+memory:
+  eventExpiryDays: 7
+bucket:
+  enabled: true
+service:
+  submit: true
+  workerRead: true
+hostRoles: []
+people:
+  - actorId: alice
+    pin: XYZ1000
+    status: active
+projects:
+  - projectId: example-project
+    maintainers: [alice]
+    members: [alice]
+    deleters: []

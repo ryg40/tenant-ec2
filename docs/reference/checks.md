@@ -4,8 +4,8 @@
 
 `scripts/check.sh` runs source checks, local container checks and offline regression tests over its own tree.
 An absent file kind gives a skip line.
-Each operations, storage, verifier and publish regression line reports a skip when its test file is absent.
-The full form has 39 result lines for this tree.
+Each memory, operations, storage, verifier and publish regression line reports a skip when its test file is absent.
+The number of result lines depends on the templates and stage files in the tree.
 The pre-commit hook runs the check script on the exact staged copy, before the scan.
 
 ```sh
@@ -18,12 +18,33 @@ The offline form makes no external network call.
 Its Caddy test still uses a local container and HTTP stubs.
 It neither pulls nor builds a missing check image.
 
+## Mac source coverage
+
+All tracked CloudFormation templates include the Mac allocation and runtime templates in the existing lint loop.
+The zsh bootstrap gets `zsh -n`, never shellcheck's Bash parser.
+The standalone Mac Compose model uses Docker Compose config with isolated stub inputs; no application image starts.
+The check script runs `test-macos-host.py`, `test-macos-infra.py`, `test-macos-bootstrap.py`, `test-macos-credentials.py` and `test-macos-compose.py` from `scripts/`.
+The credential tests require Python's `botocore`; the Node refresh test remains a fixture, not a real Node SDK test.
+`scripts/check-macos-machine.py` requires Python's `jsonschema` and validates the tracked candidate against `scripts/macos-machine.schema.json`.
+The deployment machine contract remains the bootstrap's separate closed schema, reused by the deployed verifier.
+
+Verifier regressions preserve all homelab combinations and add documented Podman JSON shapes, selected-service checks, account metadata and redirect redaction.
+Development-only Podman fixture cases report an explicit skip in a portable export without those fixtures.
+A malformed state, absent health, wrong variant/file set, public gate binding or missing service fails before internal probes.
+The operator-only `--tunnel-check` follows no redirect and emits no URL or response body.
+
+Not verified: Mac execution, VM forwarding, native account restrictions, credential transport, Entra login, paid model access or memory operations.
+A source check never qualifies the dormant agent or bypasses its upstream release dependency.
+
 ## Tools and files
 
 | Check | Files | Tool |
 | --- | --- | --- |
 | `cfn-lint` | Each `*.cfn.yaml` and `*.cfn.yml`. | `cfn-lint`; install with `pipx install cfn-lint`. |
 | `validate-template` | The same templates. | AWS CLI version 2, profile `tenant-ec2`. This read-only call is skipped without the profile or with `CHECK_OFFLINE=1`. |
+| `memory render` | Each `config/memory/*.yaml`, compared with its generated stage template. | Python 3 and PyYAML through `scripts/aws-memory.py check --stage <stage>`; skip when the renderer or stage files are absent. |
+| `memory stack` | Schema refusals, memory and file scopes, administrator exceptions, policy sizes and deterministic templates. | `python3 scripts/test-memory-stack.py`; needs PyYAML. No AWS call. |
+| `memory deploy` | Deploy previews, parameter forwarding, write gates, keys and output handling with isolated stubs. | `python3 scripts/test-memory-deploy.py`; no AWS call or real key creation. |
 | `shellcheck` | Each `*.sh`, executable shell text under `scripts/`, and each Git hook. | `shellcheck` 0.10.0 or later. |
 | `compose` | All four file sets, service and network memberships, port publishing, required names and option isolation. It compares each environment name of the agent and its value with the release contract, with `off` and `mcp`. | Docker with the Compose plugin and a stub environment file. |
 | `gateway routes` | Core and Copilot route names, configuration and model settings. | Python 3 and PyYAML. |
@@ -64,6 +85,19 @@ Under `scripts/`, a first line of `#!/bin/sh` or `#!/bin/bash` also identifies a
 A different name or first line can leave a file outside these checks.
 
 ## Template and Compose checks
+
+The `memory render` step runs after template validation, once for each stage file in `config/memory/` with the `.yaml` suffix.
+The stage name comes from the file name, without the suffix.
+It runs `python3 scripts/aws-memory.py check --stage <stage>` and refuses a stale generated template.
+It makes no AWS call and does not rewrite the generated files.
+The step skips with a note when `scripts/aws-memory.py` does not exist yet, or when no stage file exists.
+When the renderer and stage files exist, a missing Python tool fails the check.
+The existing template discovery includes each generated `scripts/aws-memory-<stage>.cfn.yaml` automatically.
+Thus cfn-lint, size checks and read-only AWS validation cover those templates without a separate file list.
+
+The adjacent `memory stack` and `memory deploy` steps run the two memory regression scripts in online and offline checks.
+Each step skips only when its test script is absent; a missing Python tool or failed test fails the gate.
+They also run on the exact staged copy in the commit hook.
 
 A template larger than 51200 bytes fails, also in offline mode.
 `aws cloudformation deploy` sends a larger template through S3; the provisioner has no right to upload a template object.

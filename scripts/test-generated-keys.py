@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import unittest
 
 import yaml
 
@@ -210,5 +212,82 @@ printf 'bootstrap fixture: continues\n'
     print("generated keys: pass (recovery, write-back, failure, presence, private files and arguments)")
 
 
+class VariantTest(unittest.TestCase):
+    def test_variant_namespaces_and_preservation(self):
+        repo = Path(__file__).resolve().parents[1]
+        work = Path(tempfile.mkdtemp(prefix="generated-variants-test-"))
+        aws = work / "aws"
+        aws.write_text('''#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+secret = args[args.index("--secret-id") + 1]
+root = pathlib.Path(os.environ["FIXTURE"])
+assert secret in ("tenant-ec2/generated", "tenant-ec2/macos/generated")
+path = root / ("macos.json" if "/macos/" in secret else "homelab.json")
+with (root / "calls").open("a") as stream: stream.write(secret + "\\n")
+if "get-secret-value" in args:
+    if not path.exists():
+        print("ResourceNotFoundException", file=sys.stderr)
+        sys.exit(1)
+    print(path.read_text())
+else:
+    payload = args[args.index("--secret-string") + 1]
+    assert payload.startswith("file://")
+    source = pathlib.Path(payload[7:])
+    assert source.stat().st_mode & 0o777 == 0o600
+    path.write_text(source.read_text())
+''')
+        aws.chmod(0o700)
+        names = ("EC2_OPENVIKING_LITELLM_API_KEY", "EC2_PI_DURABLE_LITELLM_API_KEY", "EC2_PI_DURABLE_OPENVIKING_API_KEY")
+        homelab = {name: "test-generated-" + str(i) for i, name in enumerate(names)}
+        password_name = "EC2_MACOS_DEVELOPER_PASSWORD"
+        macos = {password_name: "fake-first-login-value-24", names[1]: "test-macos-generated"}
+        opts = ["--project", "tenant-ec2", "--region", "us-east-1"]
+        def run(command, variant=None, data=None, code=0, extra=()):
+            args = [sys.executable, str(repo / "scripts/generated-keys.py"), command, *opts, *extra]
+            if variant:
+                args += ["--variant", variant]
+            result = subprocess.run(args, input=json.dumps(data) if data is not None else "", capture_output=True,
+                                    text=True, timeout=20, env={"PATH": str(work) + os.pathsep + os.environ["PATH"],
+                                                              "HOME": str(work), "FIXTURE": str(work)})
+            self.assertEqual(result.returncode, code, result.stderr)
+            for value in (*homelab.values(), *macos.values()):
+                self.assertNotIn(value, result.stderr)
+                if command != "read":
+                    self.assertNotIn(value, result.stdout)
+            return result.stdout
+        run("status", "macos", code=3)
+        run("put", data=homelab)
+        run("put", "macos", macos)
+        self.assertEqual(json.loads(run("read")), homelab)
+        self.assertEqual(json.loads(run("read", "macos")), macos)
+        self.assertEqual(run("status", "macos"), password_name + ": present\n" + names[1] + ": present\n")
+        self.assertEqual(run("status").splitlines(), [name + ": present" for name in names])
+        run("put", "macos", homelab, code=1)
+        run("put", data=macos, code=1)
+        run("put", "macos", {password_name: "different-password-value"}, code=1)
+        run("put", "macos", {names[1]: "replacement-gateway-key"})
+        macos[names[1]] = "replacement-gateway-key"
+        self.assertEqual(json.loads(run("read", "macos")), macos)
+        (work / "macos.json").unlink()
+        run("put", "macos", {password_name: macos[password_name]})
+        self.assertEqual(run("status", "macos"), password_name + ": present\n" + names[1] + ": absent\n")
+        run("put", "macos", macos)
+        before = (work / "calls").read_text()
+        self.assertEqual(run("put", "macos", macos, extra=("--previous", str(work / "macos.json"))), "generated: unchanged\n")
+        # Repeat reads the current remote value, but does not issue another write.
+        self.assertEqual(before + "tenant-ec2/macos/generated\n", (work / "calls").read_text())
+        self.assertEqual(json.loads((work / "macos.json").read_text()), macos)
+        before = (work / "calls").read_text()
+        run("status", "unknown", code=2)
+        self.assertEqual(before, (work / "calls").read_text())
+        self.assertEqual(json.loads((work / "homelab.json").read_text()), homelab)
+
+
 if __name__ == "__main__":
-    main()
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(VariantTest))
+    if not result.wasSuccessful():
+        sys.exit(1)
+    print("generated variants: pass (homelab default, Mac subset, namespace separation and repeat preservation)")
+    if len(sys.argv) > 1:
+        main()

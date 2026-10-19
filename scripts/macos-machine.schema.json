@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tracked Mac candidate mount policy, not the deployment machine document",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "name", "provider", "cpus", "memoryMiB", "diskGiB", "rootful", "dataRoot", "machineData", "mounts", "services", "profiles", "personalKey"],
+  "properties": {
+    "schemaVersion": {"const": 1, "type": "integer"},
+    "name": {"const": "tenant-ec2-macos"},
+    "provider": {"const": "applehv"},
+    "cpus": {"type": "integer", "minimum": 1, "maximum": 8},
+    "memoryMiB": {"type": "integer", "minimum": 1024, "maximum": 16384},
+    "diskGiB": {"type": "integer", "minimum": 20, "maximum": 1024},
+    "rootful": {"const": false},
+    "dataRoot": {"const": "/Volumes/data"},
+    "machineData": {"const": "/Volumes/data/podman"},
+    "mounts": {
+      "const": [
+        {"source": "/Volumes/data/runtime", "target": "/run/tenant-ec2", "readOnly": true},
+        {"source": "/Volumes/data/sources", "target": "/srv/sources", "readOnly": true}
+      ]
+    },
+    "services": {"const": ["litellm", "litellm-db", "open-knowledge", "ok-auth"]},
+    "profiles": {"const": []},
+    "personalKey": {"const": "none"}
+  }
+}

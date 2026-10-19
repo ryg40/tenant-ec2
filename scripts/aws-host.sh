@@ -70,6 +70,16 @@
 #       the service of each public name. It uses no kit-local .env, no public route, no
 #       image smoke and no paid model call. It reads a bearer value inside an existing
 #       container, never in the SSM text.
+#   host-allocate | host-release | stop | start
+#       Mac only. Default to a no-call preview; --apply permits the reviewed write.
+#       Allocation uses its own CloudFormation stack. Stop does not release the host.
+#       Release needs releaseHostId in .local/macos/<runtime-stack>.json.
+#       Private state also holds reviewed price and pinned AMI evidence.
+#   session | tunnel | ssh
+#       Mac only. --apply assumes the scoped session role for 900 seconds, then starts
+#       the PIN shell, localhost port 4180 forwarding, or SSH transport on port 22.
+#       The SSH transport still needs the owner public-key authentication.
+#   --apply            permit a Mac write; homelab retains its existing behavior
 #   --dry-run          print each command and make no AWS, DNS provider or SSM call
 #   --env-file <path>  the environment file; the default is .env of this repository
 #   --help             print this text
@@ -348,8 +358,14 @@ def options(found):
     return active
 
 
-def load(path, names):
+def load(path, names, flags):
     found = parse(read_file(path), path)
+    if variant(found) == "macos":
+        macos_dispatch(flags[0], flags[1], found, *(v == "1" for v in flags[2:7]))
+        print("macos_done=1")
+        return
+    if flags[1] in ("host-allocate", "host-release", "stop", "start", "session", "tunnel", "ssh") or flags[3] == "1":
+        stop("this command or --apply needs EC2_VARIANT=macos")
     for name in names.split():
         if name in found:
             print("cfg_%s=%s" % (name, shlex.quote(found[name])))
@@ -368,7 +384,7 @@ def blocks(text):
         if mark:
             part, kind, block = mark.group(1), "", ""
             continue
-        mark = re.match(r"# ----- (Option|DNS provider) ([a-z0-9]+) -----", line)
+        mark = re.match(r"# ----- (Option|DNS provider|Variant) ([a-z0-9]+) -----", line)
         if mark:
             kind, block = mark.group(1), mark.group(2)
             continue
@@ -401,7 +417,7 @@ def compose_names(path):
     return names
 
 
-def secret(sample_path, out, allow, repo):
+def secret(sample_path, out, allow, repo, apply):
     text = read_file(sample_path)
     sample = parse(text, sample_path)
     rows = blocks(text)
@@ -409,6 +425,12 @@ def secret(sample_path, out, allow, repo):
     if not core:
         stop("%s has no name in Part 1" % sample_path)
     found = parse(sys.stdin, "stdin")
+    if variant(found) == "macos":
+        macos_dispatch(repo, "secret", found, out == "-", apply=apply == "1", allow=allow)
+        print("macos_done=1")
+        return
+    if apply == "1":
+        stop("--apply needs EC2_VARIANT=macos")
     active = options(found)
     pair = PORKBUN_PAIR if "pangolin" in active else []
     # The names that need a value: Part 1, each empty name of the block of an active
@@ -488,7 +510,12 @@ def secret(sample_path, out, allow, repo):
         if len(body.encode("utf-8")) > SECRET_MAX:
             problems.append("the secret is larger than %d bytes" % SECRET_MAX)
     if not problems and out != "-":
+        import tempfile
+        work = tempfile.mkdtemp(prefix="aws-host.")
+        out = os.path.join(work, "secret.json")
         write_file(out, body)
+        print("work=%s" % shlex.quote(work))
+        print("secret_file=%s" % shlex.quote(out))
     for name in ("EC2_PROJECT", "EC2_AWS_PROFILE", "EC2_AWS_REGION"):
         if name in found:
             print("cfg_%s=%s" % (name, shlex.quote(found[name])))
@@ -509,11 +536,786 @@ def copy_mode(source, target):
     os.chmod(target, stat.S_IMODE(os.stat(source).st_mode))
 
 
+
+def macos_dispatch(*args, **kwargs):
+    import contextlib
+    # FD 3 is the original stdout, outside the shell assignment capture.
+    with os.fdopen(os.dup(3), "w") as public, contextlib.redirect_stdout(public):
+        macos(*args, **kwargs)
+
+
+def variant(found):
+    selected = found.get("EC2_VARIANT") or os.environ.get("EC2_VARIANT") or "homelab"
+    if selected not in ("homelab", "macos"):
+        stop("EC2_VARIANT must be homelab or macos")
+    return selected
+
+
+def macos_verify_commands(project, account):
+    # Run Command starts as an administrator. Read a protected machine file before
+    # selecting its unprivileged Podman owner; never interpolate its text into a shell.
+    program = """import json, os, re, stat, sys
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate machine field")
+        result[key] = value
+    return result
+
+try:
+    project, expected = sys.argv[1:]
+    path = "/etc/" + project + "/machine.json"
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd) as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("machine ownership or mode")
+        text = stream.read(65537)
+        if len(text) > 65536:
+            raise ValueError("machine too large")
+        machine = json.loads(text, object_pairs_hook=unique)
+    if (machine.get("schemaVersion") != 1 or machine.get("project") != project or
+            machine.get("variant") != "macos" or machine.get("engine") != "podman" or
+            machine.get("fileSet") != ["compose.macos.yaml"]):
+        raise ValueError("machine selection mismatch")
+    account = machine["account"]
+    name, pin = account["name"], account["pin"]
+    if (not isinstance(name, str) or not re.fullmatch(r"xyz[0-9]{4}", name) or name != expected or
+            pin != name.upper() or account["home"] != "/Users/" + name or account["shell"] != "/bin/zsh"):
+        raise ValueError("machine account mismatch")
+except (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeError):
+    print("macos verify: machine configuration refused", file=sys.stderr)
+    sys.exit(1)
+repo = "/opt/" + project + "/macos/snapshot"
+os.execvp("sudo", ["sudo", "-u", name, "-H", "python3", "-I", repo + "/scripts/verify-deployed.py",
+                    "--repo", repo, "--project", project, "--variant", "macos", "--engine", "podman",
+                    "--file-set", "compose.macos.yaml", "--edge-names", ""])
+"""
+    return ["set +x", "set -eu", "cd /opt/" + project + "/macos/snapshot",
+            "python3 -I -c " + shlex.quote(program) + " " + shlex.quote(project) + " " + shlex.quote(account)]
+
+
+def macos_podman(found):
+    """Match the machine schema bounds without an engine or provider call."""
+    provider = found.get("EC2_MACOS_PODMAN_PROVIDER") or os.environ.get("EC2_MACOS_PODMAN_PROVIDER") or "applehv"
+    if provider != "applehv":
+        stop("EC2_MACOS_PODMAN_PROVIDER: only applehv is supported")
+    sizes = {"PodmanProvider": provider}
+    for field, name, default, low, high in (
+            ("PodmanCpus", "EC2_MACOS_PODMAN_CPUS", "4", 1, 8),
+            ("PodmanMemoryMiB", "EC2_MACOS_PODMAN_MEMORY_MIB", "8192", 1024, 16384),
+            ("PodmanDiskGiB", "EC2_MACOS_PODMAN_DISK_GIB", "80", 20, 1024)):
+        value = found.get(name) or os.environ.get(name) or default
+        if not re.fullmatch(r"[0-9]+", value) or not low <= int(value) <= high:
+            stop(name + ": expected an integer from " + str(low) + " to " + str(high))
+        sizes[field] = str(int(value))
+    return sizes
+
+
+def macos(repo, command, found, dry, apply=False, replace=False, remove=False, write=False, allow=""):
+    """Keep Mac state, private responses and lifecycle guards separate from homelab."""
+    import datetime as dt
+    import importlib.util
+    import ipaddress
+    from pathlib import Path
+    import subprocess
+    import tempfile
+    import urllib.parse
+    import uuid
+
+    root = Path(repo)
+    allocation_parameters = "Project AvailabilityZone InstanceType".split()
+    runtime_parameters = ("Project DedicatedHostId AvailabilityZone AmiId VpcCidr RootVolumeSize "
+                          "DataVolumeSize SshPublicKey SnapshotRepository SnapshotTag SnapshotCommit "
+                          "MemoryStage MemoryArn MemoryBucket AgentActorId ProposalProject DeveloperPin "
+                          "PodmanProvider PodmanCpus PodmanMemoryMiB PodmanDiskGiB").split()
+    podman_sizes = macos_podman(found)
+
+    def need(ok, message):
+        if not ok:
+            stop(message)
+
+    def setting(name, default=""):
+        return found.get(name) or os.environ.get(name) or default
+
+    def matches(value, pattern, name):
+        need(isinstance(value, str) and re.fullmatch(pattern, value), name + ": invalid form")
+        return value
+
+    def mapping(rows, key, value):
+        need(isinstance(rows, list) and all(isinstance(row, dict) and isinstance(row.get(key), str) and
+             isinstance(row.get(value), str) for row in rows), "invalid AWS rows")
+        result = {row[key]: row[value] for row in rows}
+        need(len(result) == len(rows), "ambiguous AWS rows")
+        return result
+
+    def timestamp(value):
+        need(isinstance(value, str), "missing reviewed timestamp or allocation time")
+        instant = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        need(instant.tzinfo is not None, "timestamp needs a time zone")
+        need(instant <= dt.datetime.now(dt.timezone.utc), "timestamp is in the future")
+        return instant
+
+    def private(path, optional=False):
+        for parent in [path, *path.parents]:
+            need(not parent.is_symlink(), "private state cannot use symbolic links")
+        if optional and not path.exists():
+            return {}
+        info = path.stat()
+        need(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o077,
+             "private state needs an owned regular file with mode 0600")
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                need(key not in result, "duplicate private state field")
+                result[key] = value
+            return result
+        data = json.loads(path.read_text(), object_pairs_hook=unique)
+        need(isinstance(data, dict), "private state must be an object")
+        return data
+
+    def save(path, data):
+        for parent in [path, *path.parents]:
+            need(not parent.is_symlink(), "private state cannot use symbolic links")
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        if path.exists():
+            need(path.stat().st_uid == os.geteuid() and stat.S_ISREG(path.stat().st_mode) and
+                 not path.stat().st_mode & 0o077, "private state destination permissions are unsafe")
+        fd, name = tempfile.mkstemp(prefix=".state-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump(data, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+            os.replace(name, path)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
+
+    # Unknown names cannot silently become service settings or credentials.
+    sample_values = parse(read_file(str(root / ".env.example")), "sample")
+    extra = {"EC2_PROJECT", "EC2_AWS_PROFILE", "COMPOSE_PROJECT_NAME"}
+    extra.update("EC2_KIT_" + kind + "_" + kit for kind in ("SOURCE", "TOKEN")
+                 for kit in ("LITELLM", "OPEN_KNOWLEDGE", "PI_DURABLE"))
+    need(not set(found) - set(sample_values) - extra, "macos: unknown environment setting")
+    need(not found.get("EC2_OPTIONS"), "EC2_OPTIONS must be empty for macos")
+    need(not found.get("EC2_EDGE_NAMES"), "EC2_EDGE_NAMES must be empty for macos")
+    need(found.get("EC2_DNS_PROVIDER", "manual") in ("", "manual"),
+         "EC2_DNS_PROVIDER is unsupported for macos")
+    excluded = ("EC2_DOMAIN", "EC2_ACME_EMAIL", "EC2_ADMIN_CIDR", "EC2_GERBIL_BASE_ENDPOINT",
+                "EC2_PI_DURABLE_OPENVIKING_API_KEY", "EC2_BUCKET")
+    for name, value in found.items():
+        if name in excluded or name.startswith(("EC2_OPENVIKING_", "EC2_PANGOLIN_", "EC2_COPILOT_", "EC2_NEWT_")):
+            need(not value, name + " is unsupported for macos")
+    need(command != "dns", "dns is unavailable for macos, including plan and dry-run")
+    if apply:
+        need(command in ("host-allocate", "host-release", "stop", "start", "deploy", "secret", "session", "tunnel", "ssh"),
+             "--apply is not supported for this command")
+    if command in ("host-allocate", "host-release", "stop", "start", "deploy", "secret", "session", "tunnel", "ssh") and not apply:
+        dry = True
+    if dry:
+        print("dry run: macos " + command + "; no AWS call, provider call, temporary file or mutation")
+        plans = {
+            "host-allocate": "review <rate> <currency> in <region> at <timestamp>; minimum 24 billable hours; cloudformation create-stack --template-file scripts/aws-macos-allocation.cfn.yaml --stack-name <allocation-stack>; never allocate-hosts",
+            "host-release": "confirm <host> in private state; check ownership, age, availability and stopped attachments; cloudformation delete-stack --stack-name <allocation-stack>; verify released",
+            "stop": "ec2 stop-instances --instance-ids <runtime-instance>; stopping does not release the host",
+            "start": "ec2 start-instances --instance-ids <runtime-instance>; require its allocated available host",
+            "deploy": "check stage, boundary, pinned AMI and exact parameters of scripts/aws-host-macos.cfn.yaml; preview change set; separate --replace-instance and --allow-remove gates",
+            "outputs": "read runtime outputs; values stay private; --write saves ignored deployment state",
+            "secret": "validate selected services; write <project>/macos/env; no DNS, OpenViking, personal IAM or SSH private key",
+            "generated-status": "read <project>/macos/generated with --variant macos; print names only",
+            "verify": "ssm send-command --document-name AWS-RunShellScript; validate /etc/<project>/machine.json; cd /opt/<project>/macos/snapshot; sudo -u <machine.account.name> -H python3 -I /opt/<project>/macos/snapshot/scripts/verify-deployed.py --repo /opt/<project>/macos/snapshot --project <project> --variant macos --engine podman --file-set compose.macos.yaml --edge-names <empty>",
+        }
+        for kind, document in (("session", "<SessionDocumentName>"), ("tunnel", "AWS-StartPortForwardingSession"),
+                               ("ssh", "AWS-StartSSHSession")):
+            plans[kind] = "sts assume-role --role-arn <MacosSessionRoleArn> --duration-seconds 900; ssm start-session --target <InstanceId> --document-name " + document
+        print("dry run: " + plans[command])
+        if command == "secret":
+            secret_values(sample_values, found, allow, root, dry=True)
+        return
+
+    project = matches(setting("EC2_PROJECT", "tenant-ec2"), r"[a-z][a-z0-9-]{2,30}", "EC2_PROJECT")
+    profile = matches(setting("EC2_AWS_PROFILE", project), r"[A-Za-z0-9_.-]+", "EC2_AWS_PROFILE")
+    need(not profile.endswith("-admin"), "use the provisioner profile, not an administrator")
+    region = matches(setting("EC2_AWS_REGION", "us-east-1"), r"[a-z]{2}(?:-[a-z]+)+-\d+", "EC2_AWS_REGION")
+    stack = matches(setting("EC2_MACOS_STACK_NAME", project + "-macos-host"),
+                    re.escape(project) + r"-macos-[A-Za-z0-9-]+", "EC2_MACOS_STACK_NAME")
+    allocation = matches(setting("EC2_MACOS_ALLOCATION_STACK_NAME", project + "-macos-allocation"),
+                         re.escape(project) + r"-macos-[A-Za-z0-9-]+", "EC2_MACOS_ALLOCATION_STACK_NAME")
+    need(stack != allocation and setting("EC2_STACK_NAME", project + "-host") not in (stack, allocation),
+         "Mac and homelab stack names must be distinct")
+    path = root / ".local" / "macos" / (stack + ".json")
+    state = private(path, optional=True)
+    identity = dict(schemaVersion=1, project=project, region=region, stack=stack, allocationStack=allocation)
+    if state:
+        need(all(state.get(k) == v for k, v in identity.items()), "private deployment state identity mismatch")
+
+    def cost():
+        print("Cost/state: allocated and stopped hosts keep charging outside pending scrub; the minimum is 24 billable hours.", flush=True)
+        print("Cost/state: pending scrub pauses host billing; release ends future host charges, not retained storage charges.", flush=True)
+
+    def aws(service, operation, *args, absent=False, failed_wait=False):
+        result = subprocess.run(["aws", "--profile", profile, "--region", region, "--no-cli-pager",
+                                 "--output", "json", service, operation, *args],
+                                capture_output=True, text=True, timeout=1800,
+                                env=dict(os.environ, AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off"))
+        if result.returncode:
+            if failed_wait:
+                return None
+            if absent and "(ValidationError)" in result.stderr and ("Stack with id " + args[1] + " does not exist") in result.stderr:
+                return None
+            stop("macos AWS operation failed: " + service + " " + operation + "; inspect private state; charges may remain")
+        return json.loads(result.stdout) if result.stdout.strip() else {}
+
+    def get_stack(name, optional=False):
+        data = aws("cloudformation", "describe-stacks", "--stack-name", name, absent=optional)
+        if data is None:
+            return None
+        rows = data["Stacks"]
+        need(len(rows) == 1 and rows[0]["StackName"] == name, "ambiguous or wrong stack identity")
+        item = rows[0]
+        matches(item["StackId"], r"arn:[a-z-]+:cloudformation:" + re.escape(region) +
+                r":\d{12}:stack/" + re.escape(name) + r"/[A-Za-z0-9-]+", "stack identity")
+        return item
+
+    def params(item):
+        return mapping(item.get("Parameters", []), "ParameterKey", "ParameterValue")
+
+    def outputs(item):
+        return mapping(item.get("Outputs", []), "OutputKey", "OutputValue")
+
+    def stable(item):
+        allowed = ("CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE")
+        if command == "host-release" and item["StackName"] == allocation:
+            allowed += ("DELETE_FAILED", "CREATE_FAILED", "ROLLBACK_FAILED", "DELETE_IN_PROGRESS")
+        need(item["StackStatus"] in allowed, "stack is not stable; reconcile it without another allocation")
+
+    def template(name, names):
+        text = (root / "scripts" / name).read_text()
+        section = text.split("\nParameters:\n", 1)[1].split("\nResources:", 1)[0]
+        section = re.split(r"\n[A-Za-z][A-Za-z0-9]*:", section)[0]
+        actual = re.findall(r"^  ([A-Za-z][A-Za-z0-9]*):", section, flags=re.M)
+        need(sorted(actual) == sorted(names), "template parameter list mismatch")
+        return str(root / "scripts" / name)
+
+    def selected():
+        stage = matches(setting("EC2_MACOS_MEMORY_STAGE"), r"dev|test|prod", "EC2_MACOS_MEMORY_STAGE")
+        spec = importlib.util.spec_from_file_location("memory_renderer", root / "scripts/aws-memory.py")
+        memory = importlib.util.module_from_spec(spec)
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(memory)
+        config = memory.load_config(stage, root)
+        person = memory.active_person(config, setting("EC2_MACOS_PERSON"))
+        pin = matches(setting("EC2_MACOS_DEVELOPER_PIN"), r"XYZ[0-9]{4}", "EC2_MACOS_DEVELOPER_PIN")
+        need(pin == person["pin"], "EC2_MACOS_DEVELOPER_PIN must match the selected active person")
+        need(config["region"] == region, "stage region mismatch")
+        roles = [r for r in config.get("hostRoles", []) if r["roleSuffix"] == "macos-role"]
+        need(len(roles) == 1, "stage needs exactly one macos-role admission")
+        role = roles[0]
+        need(setting("EC2_MACOS_AGENT") == role["actorId"] and
+             setting("EC2_MACOS_PROPOSAL_PROJECT") == role["proposalProject"], "stage agent or proposal project mismatch")
+        need(person["actorId"] != role["actorId"], "person and agent must be distinct")
+        selection = dict(personActor=person["actorId"], personPin=person["pin"], localAccount=person["pin"].lower(), stage=stage)
+        if state.get("personActor"):
+            need(all(state.get(k) == v for k, v in selection.items()),
+                 "person selection changed; an existing interactive account cannot be renamed or added")
+        saved = private(root / ".local" / "memory" / (stage + ".json"))
+        arn = saved["MemoryArn"]
+        matches(arn, r"arn:[a-z-]+:bedrock-agentcore:" + re.escape(region) + r":\d{12}:memory/" +
+                re.escape(project.replace("-", "_") + "_memory_" + stage) + r"-[A-Za-z0-9]+", "stage MemoryArn")
+        need(saved["MemoryId"] == arn.rsplit("/", 1)[1], "stage memory identifier mismatch")
+        need(saved.get("BucketName", "") == project + "-memory-" + stage, "stage bucket mismatch")
+        for name, key in (("EC2_MACOS_MEMORY_ID", "MemoryId"), ("EC2_MACOS_MEMORY_ARN", "MemoryArn"),
+                          ("EC2_MACOS_MEMORY_BUCKET", "BucketName")):
+            need(not setting(name) or setting(name) == saved[key], name + ": private output mismatch")
+        # Exercise the M2 service configuration contract, not the person profile renderer.
+        client = memory.host_client_config(config, "macos-role", saved["MemoryId"])
+        need(client["profile"] == "ec2-instance" and client["actorId"] == role["actorId"], "host client configuration mismatch")
+        state.update(selection)
+        return stage, role, saved
+
+    def scope_check(stage, role, saved):
+        live = get_stack("bootstrap-" + project + "-memory-" + stage)
+        stable(live)
+        current = outputs(live)
+        need(all(current.get(k) == saved[k] for k in ("MemoryId", "MemoryArn", "BucketName")),
+             "saved stage outputs differ from deployed stage")
+        boundary = get_stack("bootstrap-" + project)
+        stable(boundary)
+        expected = {"EnableMacos": "true", "MacosMemoryArn": saved["MemoryArn"],
+                    "MacosMemoryBucketName": saved["BucketName"], "MacosAgentActorId": role["actorId"],
+                    "MacosProposalProject": role["proposalProject"]}
+        need(all(params(boundary).get(k) == v for k, v in expected.items()), "approved Mac boundary scope mismatch")
+        need(boundary["StackId"].split(":")[4] == saved["MemoryArn"].split(":")[4], "boundary account mismatch")
+
+    az = setting("EC2_MACOS_AVAILABILITY_ZONE")
+
+    def location():
+        matches(az, re.escape(region) + r"[a-z]", "EC2_MACOS_AVAILABILITY_ZONE")
+        need(not state.get("availabilityZone") or state["availabilityZone"] == az, "private host AZ mismatch")
+
+    def allocation_stack(optional=False):
+        item = get_stack(allocation, optional)
+        if item is None:
+            return None
+        stable(item)
+        need(params(item) == {"Project": project, "AvailabilityZone": az, "InstanceType": "mac2-m2.metal"},
+             "allocation parameter mismatch; host replacement is forbidden")
+        tags = mapping(item.get("Tags", []), "Key", "Value")
+        need(tags.get("Project") == project and tags.get("Variant") == "macos", "allocation ownership mismatch")
+        out = outputs(item)
+        resources = aws("cloudformation", "list-stack-resources", "--stack-name", item["StackId"])["StackResourceSummaries"]
+        hosts = [r for r in resources if r["ResourceType"] == "AWS::EC2::Host"]
+        if not out and command == "host-release":
+            need(len(hosts) == 1, "failed allocation has no unique owned host")
+            out = {"HostId": hosts[0]["PhysicalResourceId"], "AvailabilityZone": az}
+        need(out["AvailabilityZone"] == az, "allocation output AZ mismatch")
+        matches(out["HostId"], r"h-[a-f0-9]{8,17}", "HostId")
+        need(not state.get("hostId") or state["hostId"] == out["HostId"], "wrong host; explicit replacement recovery required")
+        need(not state.get("allocationStackId") or state["allocationStackId"] == item["StackId"], "allocation stack identity changed")
+        need(len(hosts) == 1 and hosts[0]["PhysicalResourceId"] == out["HostId"], "allocation owns no unique matching host")
+        return item
+
+    def host(host_id, allocation_id=None, states=("available",)):
+        rows = aws("ec2", "describe-hosts", "--host-ids", host_id)["Hosts"]
+        need(len(rows) == 1 and rows[0]["HostId"] == host_id, "missing or ambiguous host")
+        row = rows[0]
+        need(row["AvailabilityZone"] == az and row["HostProperties"]["InstanceType"] == "mac2-m2.metal", "wrong host type or AZ")
+        tags = mapping(row.get("Tags", []), "Key", "Value")
+        need(tags.get("Project") == project and tags.get("Variant") == "macos" and
+             tags.get("Purpose") == "macos-allocation", "host ownership mismatch")
+        if allocation_id:
+            need(tags.get("aws:cloudformation:stack-id") == allocation_id, "host CloudFormation ownership mismatch")
+        need(row["State"] in states, "host unavailable, released or pending scrub")
+        timestamp(row.get("AllocationTime"))
+        return row
+
+    def runtime():
+        item = get_stack(stack)
+        stable(item)
+        out = outputs(item)
+        matches(out["InstanceId"], r"i-[a-f0-9]{8,17}", "InstanceId")
+        need(out["HostId"] == state["hostId"], "runtime host mismatch")
+        need(params(item).get("DedicatedHostId") == state["hostId"] and
+             params(item).get("AvailabilityZone") == az and params(item).get("DeveloperPin") == state["personPin"],
+             "runtime host, AZ or interactive account mismatch")
+        need(not state.get("instanceId") or state["instanceId"] == out["InstanceId"], "runtime instance identity changed")
+        return item
+
+    def attachments(host_row, instance_id=None):
+        rows = aws("ec2", "describe-instances", "--filters", "Name=host-id,Values=" + host_row["HostId"])["Reservations"]
+        instances = [i for r in rows for i in r["Instances"]]
+        need(len({i["InstanceId"] for i in instances}) == len(instances), "ambiguous attached instances")
+        for i in instances:
+            need(i["InstanceId"] == instance_id, "foreign or unrecorded host attachment")
+            need(i["Placement"]["HostId"] == host_row["HostId"] and i["Placement"]["AvailabilityZone"] == az and
+                 i["Placement"]["Tenancy"] == "host", "instance placement mismatch")
+            tags = mapping(i.get("Tags", []), "Key", "Value")
+            need(tags.get("aws:cloudformation:stack-name") == stack, "instance ownership mismatch")
+        listed = {i["InstanceId"] for i in host_row.get("Instances", [])}
+        need(listed <= {i["InstanceId"] for i in instances}, "host attachments cannot be reconciled")
+        return instances
+
+    if command == "generated-status":
+        result = subprocess.run(["python3", "-I", str(root / "scripts/generated-keys.py"), "status", "--variant", "macos",
+                                 "--project", project, "--region", region, "--profile", profile],
+                                capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            need(re.fullmatch(r"EC2_PI_DURABLE_LITELLM_API_KEY: (present|absent)|generated: secret absent", line),
+                 "unexpected generated status output")
+            print(line)
+        need(result.returncode == 0, "Mac generated secret status unavailable or incomplete")
+        return
+
+    if command == "outputs":
+        item = get_stack(stack)
+        stable(item)
+        out = outputs(item)
+        print("macos outputs: " + " ".join(sorted(k for k in out if k in
+              ("InstanceId", "HostId", "DataVolumeId", "HostRoleArn", "SessionDocumentName", "DeveloperAccount"))) + "; values withheld")
+        if write:
+            need(state.get("hostId") == out["HostId"], "save allocation state before runtime outputs")
+            need(params(item).get("DeveloperPin") == state.get("personPin"), "runtime person mismatch")
+            state["outputs"] = out
+            state["instanceId"] = out["InstanceId"]
+            save(path, state)
+        return
+
+    if command in ("session", "tunnel", "ssh"):
+        stage, role, saved = selected()
+        scope_check(stage, role, saved)
+        need(state.get("hostId"), "session requires private allocation state")
+        location()
+        allocation_item = allocation_stack()
+        row = host(state["hostId"], allocation_item["StackId"])
+        item = runtime()
+        out = outputs(item)
+        instances = attachments(row, out["InstanceId"])
+        need(len(instances) == 1 and instances[0]["State"]["Name"] == "running", "session needs the running runtime instance")
+        account = matches(out.get("DeveloperAccount", ""), r"xyz[0-9]{4}", "DeveloperAccount")
+        need(account == state.get("localAccount"), "developer account output mismatch")
+        boundary = get_stack("bootstrap-" + project)
+        stable(boundary)
+        arn = outputs(boundary).get("MacosSessionRoleArn", "")
+        matches(arn, r"arn:[a-z-]+:iam::" + re.escape(item["StackId"].split(":")[4]) +
+                r":role/" + re.escape(project) + r"-macos-session", "MacosSessionRoleArn")
+        if command == "session":
+            document = matches(out.get("SessionDocumentName", ""), re.escape(project) + r"-macos-session", "SessionDocumentName")
+            parameters = {}
+        elif command == "tunnel":
+            document = "AWS-StartPortForwardingSession"
+            parameters = dict(portNumber=["4180"], localPortNumber=["4180"])
+        else:
+            document = "AWS-StartSSHSession"
+            parameters = dict(portNumber=["22"])
+        cost()
+        response = aws("sts", "assume-role", "--role-arn", arn, "--role-session-name", "macos-operator", "--duration-seconds", "900")
+        credentials = response["Credentials"]
+        need(all(isinstance(credentials.get(k), str) and credentials[k] for k in
+                 ("AccessKeyId", "SecretAccessKey", "SessionToken", "Expiration")), "invalid temporary session credentials")
+        expiry = dt.datetime.fromisoformat(credentials["Expiration"].replace("Z", "+00:00"))
+        need(expiry.tzinfo is not None and expiry > dt.datetime.now(dt.timezone.utc), "expired session credentials")
+        environment = {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+        environment.update(AWS_ACCESS_KEY_ID=credentials["AccessKeyId"], AWS_SECRET_ACCESS_KEY=credentials["SecretAccessKey"],
+                           AWS_SESSION_TOKEN=credentials["SessionToken"], AWS_CONFIG_FILE=os.devnull,
+                           AWS_SHARED_CREDENTIALS_FILE=os.devnull, AWS_EC2_METADATA_DISABLED="true",
+                           AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off")
+        args = ["aws", "--region", region, "--no-cli-pager", "ssm", "start-session", "--target", out["InstanceId"],
+                "--document-name", document]
+        if parameters:
+            args += ["--parameters", json.dumps(parameters)]
+        result = subprocess.run(args, env=environment, stdout=sys.stdout, stderr=subprocess.DEVNULL)
+        need(result.returncode == 0, "Mac session failed; provider error withheld")
+        return
+
+    if command == "verify":
+        verifier = root / "scripts/verify-deployed.py"
+        need(verifier.is_file() and all(flag in verifier.read_text() for flag in ("--variant", "--engine", "--file-set", "--project")),
+             "verify-deployed.py has no macos variant yet")
+        need(state.get("hostId"), "verify requires private allocation state")
+        item = runtime()
+        out = outputs(item)
+        account = matches(out.get("DeveloperAccount", ""), r"xyz[0-9]{4}", "DeveloperAccount")
+        need(account == state.get("localAccount"), "developer account output mismatch")
+        # Run Command is administrative recovery, not an interactive Run As session.
+        # The stack output is a cross-check; machine.json supplies the actual account.
+        commands = macos_verify_commands(project, account)
+        cost()
+        sent = aws("ssm", "send-command", "--instance-ids", out["InstanceId"], "--document-name", "AWS-RunShellScript",
+                   "--parameters", json.dumps({"commands": commands, "executionTimeout": ["900"]}))
+        command_id = matches(sent["Command"]["CommandId"], r"[a-f0-9-]{36}", "command identity")
+        aws("ssm", "wait", "command-executed", "--command-id", command_id, "--instance-id", out["InstanceId"])
+        reply = aws("ssm", "get-command-invocation", "--command-id", command_id, "--instance-id", out["InstanceId"])
+        need(reply["Status"] == "Success", "Mac verification failed; remote output withheld")
+        print("macos verify: pass; remote output withheld")
+        return
+
+    stage, role, saved = selected()
+    def existing_person():
+        item = get_stack(stack, optional=True)
+        if item:
+            stable(item)
+            need(params(item).get("DeveloperPin") == state["personPin"],
+                 "person selection changed on deployed runtime")
+        return item
+
+    if command == "secret":
+        generated_name = "EC2_PI_DURABLE_LITELLM_API_KEY"
+        # Validate all non-generated values before a read. The generated value comes
+        # through a private pipe only when the selected runtime needs the agent.
+        machine = root / "config/macos/machine.json"
+        agent = machine.is_file() and "pi-durable" in json.loads(machine.read_text()).get("services", [])
+        if agent and not found.get(generated_name) and generated_name not in allow.split():
+            secret_values(sample_values, found, allow + " " + generated_name, root)
+            result = subprocess.run(["python3", "-I", str(root / "scripts/generated-keys.py"), "read",
+                                     "--variant", "macos", "--project", project, "--region", region, "--profile", profile],
+                                    capture_output=True, text=True, timeout=90)
+            need(result.returncode == 0, "Mac generated secret read failed")
+            generated = json.loads(result.stdout)
+            need(set(generated) == {generated_name} and isinstance(generated[generated_name], str), "invalid generated key response")
+            found[generated_name] = generated[generated_name]
+        body = secret_values(sample_values, found, allow, root)
+        scope_check(stage, role, saved)
+        existing_person()
+        cost()
+        secret_id = project + "/macos/env"
+        result = subprocess.run(["aws", "--profile", profile, "--region", region, "--no-cli-pager", "--output", "json", "secretsmanager",
+                                 "describe-secret", "--secret-id", secret_id], capture_output=True, text=True,
+                                env=dict(os.environ, AWS_PAGER="", AWS_CLI_AUTO_PROMPT="off"))
+        need(result.returncode == 0 or "(ResourceNotFoundException)" in result.stderr, "Mac secret lookup failed")
+        with tempfile.TemporaryDirectory(prefix="macos-secret-") as temp:
+            target = Path(temp) / "secret.json"
+            target.write_text(json.dumps(body))
+            target.chmod(0o600)
+            if result.returncode:
+                aws("secretsmanager", "create-secret", "--name", secret_id, "--secret-string", "file://" + str(target))
+            else:
+                aws("secretsmanager", "put-secret-value", "--secret-id", secret_id, "--secret-string", "file://" + str(target))
+        print("macos secret: written; excluded settings and values withheld")
+        return
+
+    location()
+    if command == "host-allocate":
+        source = template("aws-macos-allocation.cfn.yaml", allocation_parameters)
+        price = {"hourlyRate": setting("EC2_MACOS_HOST_HOURLY_USD"), "currency": setting("EC2_MACOS_PRICE_CURRENCY", "USD"),
+                 "region": setting("EC2_MACOS_PRICE_REGION"), "source": setting("EC2_MACOS_PRICE_SOURCE"), "checkedAt": setting("EC2_MACOS_PRICE_CHECKED_AT")}
+        need(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", price["hourlyRate"]) and 0 < float(price["hourlyRate"]) < 1000,
+             "reviewed hourly rate required")
+        need(price["currency"] == "USD" and price["region"] == region and
+             price["source"] == "https://aws.amazon.com/ec2/dedicated-hosts/pricing/",
+             "reviewed USD official price source required")
+        timestamp(price["checkedAt"])
+        scope_check(stage, role, saved)
+        item = allocation_stack(optional=True)
+        inventory = aws("ec2", "describe-hosts", "--filter", "Name=tag:Project,Values=" + project,
+                        "Name=tag:Variant,Values=macos")["Hosts"]
+        allocated = [h for h in inventory if h["State"] not in ("released", "released-permanent-failure")]
+        if item:
+            existing_person()
+            need(len(allocated) == 1 and allocated[0]["HostId"] == outputs(item)["HostId"], "duplicate allocation")
+        else:
+            need(not allocated and not state.get("hostId"), "duplicate or historical allocation; explicit recovery required")
+            need(get_stack(stack, optional=True) is None, "runtime already exists; explicit replacement recovery required")
+            cost()
+            print("Reviewed price: " + price["hourlyRate"] + " USD per hour; minimum " +
+                  format(float(price["hourlyRate"]) * 24, ".3f") + " USD before other resources.", flush=True)
+            aws("cloudformation", "create-stack", "--stack-name", allocation, "--template-body", "file://" + source,
+                "--disable-rollback", "--tags", "Key=Project,Value=" + project, "Key=Variant,Value=macos",
+                "--parameters", "ParameterKey=Project,ParameterValue=" + project,
+                "ParameterKey=AvailabilityZone,ParameterValue=" + az, "ParameterKey=InstanceType,ParameterValue=mac2-m2.metal")
+            waited = aws("cloudformation", "wait", "stack-create-complete", "--stack-name", allocation, failed_wait=True)
+            if waited is None:
+                failed = get_stack(allocation)
+                resources = aws("cloudformation", "list-stack-resources", "--stack-name", failed["StackId"])["StackResourceSummaries"]
+                hosts = [r for r in resources if r["ResourceType"] == "AWS::EC2::Host" and r.get("PhysicalResourceId")]
+                need(len(hosts) <= 1, "failed allocation has ambiguous hosts; administrator reconciliation required")
+                state.update(identity, availabilityZone=az, instanceType="mac2-m2.metal", price=price,
+                             allocationStackId=failed["StackId"], status="allocation-incomplete")
+                if hosts:
+                    state["hostId"] = matches(hosts[0]["PhysicalResourceId"], r"h-[a-f0-9]{8,17}", "failed allocation HostId")
+                save(path, state)
+                stop("allocation did not complete; owned host reference saved privately when present; review host-release after eligibility; charges may remain")
+            item = allocation_stack()
+        row = host(outputs(item)["HostId"], item["StackId"])
+        attachments(row, state.get("instanceId"))
+        state.update(identity, availabilityZone=az, instanceType="mac2-m2.metal", hostId=row["HostId"],
+                     allocationStackId=item["StackId"], allocatedAt=row["AllocationTime"], status="allocated", price=price)
+        save(path, state)
+        print("macos allocation: owned host recorded privately; no second host is allocated")
+        return
+
+    need(state.get("hostId") and state.get("allocationStackId"), "missing private allocation state")
+    if command == "host-release":
+        need(state.get("releaseHostId") == state["hostId"], "confirm the exact host with releaseHostId in private state")
+        item = allocation_stack(optional=True)
+        if item is None:
+            row = host(state["hostId"], state["allocationStackId"], states=("released", "released-permanent-failure"))
+            state["status"] = "released"
+            save(path, state)
+            print("macos release: already released; retained storage can still charge")
+            return
+        row = host(state["hostId"], item["StackId"])
+        need((dt.datetime.now(dt.timezone.utc) - timestamp(row.get("AllocationTime"))).total_seconds() >= 86400,
+             "allocation is younger than the 24-hour minimum")
+        if state.get("instanceId"):
+            runtime()
+        for i in attachments(row, state.get("instanceId")):
+            need(i["State"]["Name"] in ("stopped", "terminated"), "release requires stopped or terminated attachments")
+        scope_check(stage, role, saved)
+        cost()
+        if item["StackStatus"] != "DELETE_IN_PROGRESS":
+            aws("cloudformation", "delete-stack", "--stack-name", item["StackId"])
+        state["status"] = "release-requested"
+        save(path, state)
+        aws("cloudformation", "wait", "stack-delete-complete", "--stack-name", item["StackId"])
+        host(state["hostId"], item["StackId"], states=("released", "released-permanent-failure"))
+        state["status"] = "released"
+        save(path, state)
+        print("macos release: released; retained storage can still charge")
+        return
+
+    need(state.get("status") not in ("released", "release-requested"), "released or releasing host cannot be reused")
+    item = allocation_stack()
+    row = host(state["hostId"], item["StackId"], states=("available", "pending") if command == "stop" else ("available",))
+    if command in ("stop", "start"):
+        current = runtime()
+        instance_id = outputs(current)["InstanceId"]
+        instances = attachments(row, instance_id)
+        need(len(instances) == 1, "runtime instance is missing")
+        status = instances[0]["State"]["Name"]
+        cost()
+        if command == "stop" and status in ("stopped", "stopping"):
+            print("macos stop: already stopped or stopping; the host is not released")
+            return
+        if command == "start" and status in ("running", "pending"):
+            print("macos start: already running or starting")
+            return
+        need(status == ("running" if command == "stop" else "stopped"), "instance state does not permit this transition")
+        scope_check(stage, role, saved)
+        aws("ec2", command + "-instances", "--instance-ids", instance_id)
+        print("macos " + command + ": request accepted; completion is not verified")
+        return
+
+    need(command == "deploy", "unknown macos command")
+    source = template("aws-host-macos.cfn.yaml", runtime_parameters)
+    template_text = Path(source).read_text()
+    for logical in ("Instance", "DataVolume"):
+        need(re.search(r"^  " + logical + r":\s*$", template_text, re.M), "runtime template lacks a guarded resource")
+    scope_check(stage, role, saved)
+    ami = state.get("ami", {})
+    image = matches(ami.get("imageId", ""), r"ami-[a-f0-9]{8,17}", "private pinned AMI")
+    parameter = setting("EC2_MACOS_AMI_SSM_PARAMETER")
+    matches(parameter, r"/aws/service/ec2-macos/[a-z0-9-]+/arm64_mac/latest/image_id", "EC2_MACOS_AMI_SSM_PARAMETER")
+    need(ami.get("parameter") == parameter and ami.get("region") == region and ami.get("architecture") == "arm64_mac",
+         "reviewed AMI metadata mismatch; no automatic AMI lookup")
+    timestamp(ami.get("reviewedAt"))
+    root_size = setting("EC2_MACOS_ROOT_VOLUME_SIZE", "100")
+    data_size = setting("EC2_MACOS_DATA_VOLUME_SIZE", "150")
+    need(root_size.isdigit() and data_size.isdigit() and 1 <= int(data_size) <= 16384 and
+         isinstance(ami.get("rootVolumeMinGiB"), int) and 1 <= ami["rootVolumeMinGiB"] <= int(root_size) <= 16384,
+         "volume size or reviewed AMI minimum mismatch")
+    cidr = ipaddress.ip_network(setting("EC2_VPC_CIDR"), strict=True)
+    need(cidr.version == 4 and 16 <= cidr.prefixlen <= 26, "EC2_VPC_CIDR: expected an IPv4 range /16 to /26")
+    url = urllib.parse.urlsplit(setting("EC2_SNAPSHOT_REPOSITORY"))
+    need(url.scheme == "https" and url.hostname and not url.username and not url.password and not url.query and not url.fragment,
+         "snapshot needs a credential-free HTTPS URL")
+    tag = matches(setting("EC2_SNAPSHOT_TAG"), r"[A-Za-z0-9][A-Za-z0-9._-]*", "EC2_SNAPSHOT_TAG")
+    commit = matches(setting("EC2_SNAPSHOT_COMMIT"), r"[a-f0-9]{40}", "EC2_SNAPSHOT_COMMIT")
+    key = Path(setting("EC2_SSH_PUBLIC_KEY_FILE")).expanduser().read_text().strip()
+    matches(key, r"ssh-(?:ed25519|rsa) [A-Za-z0-9+/]+={0,3}(?: [^\r\n]+)?", "SSH public key")
+    import base64
+    import struct
+    words = key.split()
+    blob = base64.b64decode(words[1], validate=True)
+    size = struct.unpack(">I", blob[:4])[0]
+    need(blob[4:4 + size].decode("ascii") == words[0] and len(blob) >= size + 12, "invalid SSH public key encoding")
+    values = dict(Project=project, DedicatedHostId=state["hostId"], AvailabilityZone=az, AmiId=image,
+                  VpcCidr=str(cidr), RootVolumeSize=root_size, DataVolumeSize=data_size, SshPublicKey=key,
+                  SnapshotRepository=url.geturl(), SnapshotTag=tag, SnapshotCommit=commit, MemoryStage=stage,
+                  MemoryArn=saved["MemoryArn"], MemoryBucket=saved["BucketName"], AgentActorId=role["actorId"],
+                  ProposalProject=role["proposalProject"], DeveloperPin=state["personPin"], **podman_sizes)
+    current = get_stack(stack, optional=True)
+    if current:
+        stable(current)
+        need(params(current).get("DeveloperPin") == state["personPin"], "person selection changed on deployed runtime")
+        attachments(row, outputs(current)["InstanceId"])
+    else:
+        attachments(row)
+    cost()
+    change = "macos-" + uuid.uuid4().hex
+    aws("cloudformation", "create-change-set", "--stack-name", stack, "--change-set-name", change,
+        "--change-set-type", "UPDATE" if current else "CREATE", "--template-body", "file://" + source,
+        "--capabilities", "CAPABILITY_NAMED_IAM", "--tags", "Key=Project,Value=" + project, "Key=Variant,Value=macos",
+        "--parameters", json.dumps([dict(ParameterKey=k, ParameterValue=v) for k, v in values.items()]))
+    aws("cloudformation", "wait", "change-set-create-complete", "--stack-name", stack, "--change-set-name", change, failed_wait=True)
+    review = aws("cloudformation", "describe-change-set", "--stack-name", stack, "--change-set-name", change)
+    if review["Status"] == "FAILED" and any(text in review.get("StatusReason", "") for text in
+            ("didn\x27t contain changes", "No updates are to be performed")):
+        aws("cloudformation", "delete-change-set", "--stack-name", stack, "--change-set-name", change)
+        print("macos deploy: no changes")
+        return
+    need(review["Status"] == "CREATE_COMPLETE" and review["ExecutionStatus"] == "AVAILABLE", "change set is not executable")
+    refused = []
+    for entry in review["Changes"]:
+        r = entry["ResourceChange"]
+        action, logical, kind = r["Action"], r["LogicalResourceId"], r["ResourceType"]
+        replacement = r.get("Replacement") in ("True", "Conditional")
+        if kind == "AWS::EC2::Host":
+            refused.append("runtime cannot allocate or replace a Dedicated Host")
+        if logical == "Instance" and replacement and not replace:
+            refused.append("instance replacement needs --replace-instance")
+        if ((action == "Remove" and (logical == "Instance" or kind in ("AWS::EC2::Volume", "AWS::SecretsManager::Secret"))) or
+                (replacement and (kind in ("AWS::EC2::Volume", "AWS::SecretsManager::Secret")))) and not remove:
+            refused.append("data removal or replacement needs --allow-remove")
+        need(action in ("Add", "Modify", "Remove", "Import", "Dynamic") and
+             re.fullmatch(r"AWS::[A-Za-z0-9]+::[A-Za-z0-9]+", kind), "invalid change summary")
+        print("change: " + action + " " + kind + "; replacement=" + str(bool(replacement)))
+    if refused:
+        aws("cloudformation", "delete-change-set", "--stack-name", stack, "--change-set-name", change)
+        stop("; ".join(sorted(set(refused))))
+    aws("cloudformation", "execute-change-set", "--stack-name", stack, "--change-set-name", change)
+    aws("cloudformation", "wait", "stack-update-complete" if current else "stack-create-complete", "--stack-name", stack)
+    out = outputs(get_stack(stack))
+    need(out["HostId"] == state["hostId"], "deployed host output mismatch")
+    state.update(instanceId=out["InstanceId"], outputs=out)
+    save(path, state)
+    print("macos deploy: complete; outputs recorded privately; runtime qualification remains separate")
+
+
+def secret_values(sample, found, allow, root, dry=False):
+    """Allow only the selected service configuration into the Mac environment secret."""
+    service_names = ("COMPOSE_PROJECT_NAME COMPOSE_FILE EC2_VARIANT EC2_PROJECT EC2_AWS_REGION EC2_TZ "
+                     "EC2_LITELLM_MASTER_KEY EC2_LITELLM_SALT_KEY EC2_LITELLM_POSTGRES_PASSWORD "
+                     "EC2_LITELLM_UI_PASSWORD EC2_LITELLM_UI_USERNAME EC2_BEDROCK_LUNA_MODEL EC2_BEDROCK_EMBED_MODEL "
+                     "EC2_OK_ENTRA_TENANT_ID EC2_OK_ENTRA_GROUP_ID EC2_OK_OIDC_CLIENT_ID EC2_OK_OIDC_CLIENT_SECRET "
+                     "EC2_OK_COOKIE_SECRET EC2_SNAPSHOT_CLONE_TOKEN "
+                     "EC2_PI_DURABLE_API_KEY EC2_PI_DURABLE_LITELLM_API_KEY EC2_PI_DURABLE_MODEL "
+                     "EC2_PI_DURABLE_THINKING EC2_PI_DURABLE_WEB_SEARCH").split()
+    service_names += ["EC2_KIT_" + kind + "_" + kit for kind in ("SOURCE", "TOKEN")
+                      for kit in ("LITELLM", "OPEN_KNOWLEDGE", "PI_DURABLE")]
+    # The current upstream kit has no AgentCore adapter. Only an explicit runtime
+    # machine service selection can require agent credentials after that pin moves.
+    machine = root / "config/macos/machine.json"
+    agent = machine.is_file() and "pi-durable" in json.loads(machine.read_text()).get("services", [])
+    if not agent:
+        service_names = [n for n in service_names if not n.startswith("EC2_PI_DURABLE_") and
+                         n not in ("EC2_KIT_SOURCE_PI_DURABLE", "EC2_KIT_TOKEN_PI_DURABLE")]
+    body = {name: value for name, value in found.items() if name in service_names}
+    body["EC2_VARIANT"] = "macos"
+    body["COMPOSE_FILE"] = "compose.macos.yaml"
+    for name, value in body.items():
+        if unwritable(value):
+            stop(name + ": a single quote or final backslash is not allowed")
+    for name, valid in (("EC2_PI_DURABLE_THINKING", "xhigh"), ("EC2_PI_DURABLE_MODEL", "bedrock/luna"),
+                        ("EC2_PI_DURABLE_WEB_SEARCH", "off")):
+        if found.get(name, valid) != valid:
+            stop(name + ": unsupported Mac setting")
+    core = [n for part, kind, _, n in blocks(read_file(str(root / ".env.example"))) if part == "1" and not kind and n in service_names]
+    allowed = allow.split()
+    if any(n not in core for n in allowed):
+        stop("--allow-empty names an unselected service setting")
+    missing = [n for n in core if not body.get(n) and n not in allowed]
+    if missing:
+        stop("no value for " + " ".join(missing))
+    if any(placeholder(body[n], sample.get(n, "")) for n in core if body.get(n)):
+        stop("macos secret: placeholder in selected service setting")
+    # The bootstrap validates host account and disk inputs later. They do not exist
+    # while preparing this service-only secret, so validate its forms here.
+    required = ("EC2_AWS_REGION", "EC2_TZ", "EC2_LITELLM_UI_USERNAME", "EC2_BEDROCK_LUNA_MODEL", "EC2_BEDROCK_EMBED_MODEL")
+    for name in required:
+        if not body.get(name):
+            stop(name + ": selected service needs a value")
+    for name in ("EC2_OK_ENTRA_TENANT_ID", "EC2_OK_ENTRA_GROUP_ID", "EC2_OK_OIDC_CLIENT_ID"):
+        if body.get(name) and not re.fullmatch(r"[a-fA-F0-9]{8}(?:-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}", body[name]):
+            stop(name + ": expected a UUID")
+    for name in ("EC2_MACOS_PERSON", "EC2_MACOS_AGENT", "EC2_MACOS_PROPOSAL_PROJECT"):
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", found.get(name, "")):
+            stop(name + ": expected a stage identity")
+    if found.get("EC2_MACOS_MEMORY_STAGE") not in ("dev", "test", "prod"):
+        stop("EC2_MACOS_MEMORY_STAGE: expected dev, test or prod")
+    if not re.fullmatch(r"XYZ[0-9]{4}", found.get("EC2_MACOS_DEVELOPER_PIN", "")):
+        stop("EC2_MACOS_DEVELOPER_PIN: expected an uppercase stage PIN")
+    lock = found.get("EC2_MACOS_RUNTIME_LOCK", "")
+    if not re.fullmatch(r"config/macos/[A-Za-z0-9._-]+", lock):
+        stop("EC2_MACOS_RUNTIME_LOCK: expected a tracked Mac runtime lock")
+    if not dry and not (root / lock).is_file():
+        stop("EC2_MACOS_RUNTIME_LOCK: selected lock is missing")
+    if len(json.dumps(body).encode()) > SECRET_MAX:
+        stop("macos secret exceeds size limit")
+    return body
+
 mode, args = sys.argv[1], sys.argv[2:]
 if mode == "load":
-    load(args[0], args[1])
+    try:
+        load(args[0], args[1], args[2:])
+    except Exception:
+        stop("Mac input or response is invalid; values withheld")
 elif mode == "secret":
-    secret(args[0], args[1], args[2], args[3])
+    try:
+        secret(args[0], args[1], args[2], args[3], args[4])
+    except Exception:
+        stop("Mac input or response is invalid; values withheld")
 elif mode == "ssm":
     ssm(args[0], args[1])
 elif mode == "mode":
@@ -877,6 +1679,7 @@ EOT
 }
 
 dry=0
+apply=0
 env_file=
 command=
 replace=0
@@ -888,6 +1691,7 @@ while [ $# -gt 0 ]; do
     case $1 in
         -h | --help) usage; exit 0 ;;
         --dry-run) dry=1 ;;
+        --apply) apply=1 ;;
         --env-file)
             [ $# -ge 2 ] || die "--env-file needs a path"
             env_file=$2
@@ -922,9 +1726,10 @@ while [ $# -gt 0 ]; do
 done
 
 case $command in
-    deploy | outputs | secret | generated-status | dns | verify) ;;
+    deploy | outputs | secret | generated-status | dns | verify | host-allocate | host-release | stop | start | session | tunnel | ssh) ;;
     *) usage >&2; exit 2 ;;
 esac
+[ "$apply$dry" != 11 ] || die "--apply and --dry-run conflict"
 [ "$replace" = 0 ] || [ "$command" = deploy ] || die "--replace-instance is an option of deploy"
 [ "$allow_remove" = 0 ] || [ "$command" = deploy ] || die "--allow-remove is an option of deploy"
 [ "$write" = 0 ] || [ "$command" = outputs ] || die "--write is an option of outputs"
@@ -949,11 +1754,9 @@ if [ "$command" = secret ]; then
         die "secret reads the environment file on stdin: scripts/aws-host.sh secret < .env"
     if [ "$dry" = 1 ]; then
         secret_file='<temporary file, mode 0600: the JSON object>'
-        assign=$(helper secret "$sample" - "$allow_empty" "$top") || exit 1
+        assign=$(helper secret "$sample" - "$allow_empty" "$top" "$apply") || exit 1
     else
-        make_work
-        secret_file=$work/secret.json
-        assign=$(helper secret "$sample" "$secret_file" "$allow_empty" "$top") || exit 1
+        assign=$(helper secret "$sample" AUTO "$allow_empty" "$top" "$apply") || exit 1
     fi
     env_file=stdin
 else
@@ -965,10 +1768,18 @@ else
     env_dir=$(CDPATH='' cd -- "$(dirname -- "$env_file")" && pwd) ||
         die "cannot find the directory of the environment file $env_file"
     env_file=${env_dir%/}/$(basename -- "$env_file")
-    assign=$(helper load "$env_file" "$setting_names") || exit 1
+    assign=$(helper load "$env_file" "$setting_names" "$top" "$command" "$dry" "$apply" "$replace" "$allow_remove" "$write") || exit 1
 fi
-# The helper quotes each value, so the assignments are safe for eval.
+# Mac output is a static status, never shell input. Keep its private data in Python.
+case $assign in
+    *macos_done=1) printf '%s\n' "$assign" | sed '/^macos_done=1$/d'; exit 0 ;;
+esac
+# The helper quotes each homelab value, so the assignments are safe for eval.
 eval "$assign"
+if [ -n "${work:-}" ]; then
+    trap 'rm -rf "$work"' EXIT
+    trap 'exit 130' INT TERM HUP PIPE QUIT
+fi
 
 setting EC2_PROJECT tenant-ec2
 project=$value

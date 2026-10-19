@@ -1,0 +1,44 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: One separately owned Mac M2 Dedicated Host. Allocation needs a cost approval.
+
+# AWS::EC2::Host, Properties:
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-ec2-host.html
+# EC2 Mac instances, Considerations and host recovery:
+# https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-mac-instances.html
+# Stop or terminate, Release the Dedicated Host:
+# https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/mac-instance-stop.html
+# Warning: stopping an instance does not release this billable host.
+# No Retain policy: the release command deletes this allocation stack after checking eligibility.
+# Not verified: live allocation, recovery, maintenance, or release after the minimum allocation period.
+Parameters:
+  Project:
+    Type: String
+    Default: tenant-ec2
+    AllowedPattern: "[a-z][a-z0-9-]{2,30}"
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: The reviewed zone. There is no automatic capacity fallback.
+  InstanceType:
+    Type: String
+    Default: mac2-m2.metal
+    AllowedValues: [mac2-m2.metal]
+
+Resources:
+  Host:
+    Type: AWS::EC2::Host
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      InstanceType: !Ref InstanceType
+      AutoPlacement: "off"
+      HostRecovery: "on"
+      HostMaintenance: "on"
+      Tags:
+        - {Key: Project, Value: !Ref Project}
+        - {Key: Variant, Value: macos}
+        - {Key: Purpose, Value: macos-allocation}
+
+Outputs:
+  HostId:
+    Value: !Ref Host
+  AvailabilityZone:
+    Value: !Ref AvailabilityZone

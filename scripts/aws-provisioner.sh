@@ -5,7 +5,7 @@
 # See docs/credentials.md, section "The AWS provisioner".
 #
 # Usage: scripts/aws-provisioner.sh <command>
-#   deploy              create or update the IAM stack; needs the administrator profile
+#   deploy [--dry-run]  create or update the IAM stack; needs the administrator profile
 #   key                 make a new key, save it, write the profile, delete each older key;
 #                       needs the administrator profile
 #   vault               copy the saved key to Vault (home-lab mode only)
@@ -35,6 +35,11 @@
 #               EC2_VAULT_SECRET=kv/stacks/$EC2_PROJECT-provisioner
 # EC2_PROJECT is the name prefix of the provisioner policy. The script does not read
 # EC2_STACK_NAME: that name is the stack of the host (scripts/aws-host.sh).
+# Optional Mac deployment: EC2_ENABLE_MACOS=false (default). When true, require
+# EC2_MACOS_MEMORY_ARN, EC2_MACOS_MEMORY_BUCKET, EC2_MACOS_AGENT and
+# EC2_MACOS_PROPOSAL_PROJECT. The administrator reviews these private scope values.
+# deploy --dry-run validates forms and prints placeholders without AWS calls or files.
+# Existing ec2:* already includes Dedicated Host lifecycle actions in the allowed regions.
 
 set +x
 set -eu
@@ -390,14 +395,69 @@ print("provisioner selftest: pass (two modes, legacy helper, key guard, isolated
 PY
     ;;
 deploy)
-    echo "==> deploying stack $stack with profile $admin"
+    shift
+    dry=0
+    case $# in
+        0) ;;
+        1) [ "$1" = --dry-run ] || die "deploy accepts only --dry-run"; dry=1 ;;
+        *) die "deploy accepts only --dry-run" ;;
+    esac
+    enable_macos=${EC2_ENABLE_MACOS:-false}
+    export EC2_ENABLE_MACOS="$enable_macos"
+    # Validate before AWS, temporary files, or any private value reaches a diagnostic.
+    python3 - "$project" "$region" "$admin" "$profile" <<'PY'
+import os
+import re
+import sys
+
+project, region, admin, profile = sys.argv[1:]
+def require(ok, label):
+    if not ok:
+        raise SystemExit("aws-provisioner: invalid " + label)
+require(re.fullmatch(r"[a-z][a-z0-9-]{2,30}", project), "project")
+require(re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", region), "region")
+require(re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", admin), "administrator profile")
+require(admin != profile and not admin.startswith(("pi-memory-", "tenant-ec2-memory-")), "administrator profile")
+enabled = os.environ["EC2_ENABLE_MACOS"]
+require(enabled in ("false", "true"), "EC2_ENABLE_MACOS")
+# Disabled scope inputs have no effect; send empty parameters, including on updates.
+if enabled == "true":
+    arn = os.environ.get("EC2_MACOS_MEMORY_ARN", "")
+    match = re.fullmatch(r"arn:aws(?:-[a-z]+)*:bedrock-agentcore:([a-z]{2}(?:-[a-z]+)+-[0-9]+):[0-9]{12}:memory/[A-Za-z][A-Za-z0-9_-]{0,127}", arn)
+    require(match and match[1] == region, "EC2_MACOS_MEMORY_ARN")
+    require(re.fullmatch(r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]", os.environ.get("EC2_MACOS_MEMORY_BUCKET", "")), "EC2_MACOS_MEMORY_BUCKET")
+    for key in ("EC2_MACOS_AGENT", "EC2_MACOS_PROPOSAL_PROJECT"):
+        require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", os.environ.get(key, "")), key)
+PY
+    if [ "$dry" -eq 1 ]; then
+        printf '%s\n' 'aws-provisioner: deploy dry run; no AWS call or file write'
+        printf '%s\n' 'aws --profile <administrator-profile> --region <region> cloudformation deploy --template-file scripts/aws-provisioner.cfn.yaml --stack-name <bootstrap-stack> --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset --tags Project=<project> Role=provisioner'
+        printf '%s\n' "Parameters: Project=<project> Regions=<region> EnableMacos=$enable_macos"
+        if [ "$enable_macos" = true ]; then
+            printf '%s\n' 'MacosMemoryArn=<memory-arn> MacosMemoryBucketName=<bucket> MacosAgentActorId=<agent> MacosProposalProject=<proposal-project>'
+        else
+            printf '%s\n' 'Mac scope parameters are empty. Mac permissions stay disabled.'
+        fi
+        exit 0
+    fi
+    memory_arn='' memory_bucket='' agent='' proposal=''
+    if [ "$enable_macos" = true ]; then
+        memory_arn=$EC2_MACOS_MEMORY_ARN memory_bucket=$EC2_MACOS_MEMORY_BUCKET
+        agent=$EC2_MACOS_AGENT proposal=$EC2_MACOS_PROPOSAL_PROJECT
+    fi
+    echo '==> deploying the provisioner stack with the selected administrator profile'
+    export AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
     as_admin cloudformation deploy \
         --template-file "$here/aws-provisioner.cfn.yaml" \
         --stack-name "$stack" \
         --capabilities CAPABILITY_NAMED_IAM \
         --no-fail-on-empty-changeset \
         --tags "Project=$project" Role=provisioner \
-        --parameter-overrides "Project=$project" "Regions=$region"
+        --parameter-overrides "Project=$project" "Regions=$region" "EnableMacos=$enable_macos" \
+            "MacosMemoryArn=$memory_arn" "MacosMemoryBucketName=$memory_bucket" \
+            "MacosAgentActorId=$agent" "MacosProposalProject=$proposal" >/dev/null 2>&1 ||
+        die 'provisioner deployment failed; inspect the stack privately'
+    echo 'aws-provisioner: deploy complete'
     ;;
 key)
     command -v python3 >/dev/null || die "python3 not found"

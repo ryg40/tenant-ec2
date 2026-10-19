@@ -1,6 +1,8 @@
 # Install the core
 
-The core runs on one Amazon Linux 2023 x86_64 EC2 host.
+This page installs `EC2_VARIANT=homelab` on one Amazon Linux 2023 x86_64 EC2 host.
+For `macos`, use the separate [variant install flow](variants.md#prepare-and-install).
+The Mac path has different account, storage, secret, billing and tunnel requirements; do not reuse these Linux steps.
 It uses Bedrock, Caddy and the Entra gate without any option.
 Read the [architecture](architecture.md) before creating resources.
 

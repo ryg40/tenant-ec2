@@ -24,6 +24,12 @@
 #                         with no call: `aws cloudformation deploy` sends such
 #                         a template through S3, and the provisioner has no template
 #                         upload object right.
+#   2a. memory render     scripts/aws-memory.py check for each stage file in
+#                         config/memory/*.yaml. A stale template gives FAIL.
+#                         Skip when the renderer or stage files are absent.
+#   2b. memory stack      scripts/test-memory-stack.py: schema, policy and template tests.
+#   2c. memory deploy     scripts/test-memory-deploy.py: offline deploy and key stubs.
+#                         Each test step skips when its script is absent.
 #   3. shellcheck         each shell script. The first line gives the dialect.
 #                         A file of scripts/git-hooks/ has the dialect sh: the
 #                         dispatcher runs a hook with sh.
@@ -391,6 +397,10 @@ this script:
   cfn-lint           each *.cfn.yaml and *.cfn.yml
   validate-template  the same templates, with the AWS profile tenant-ec2;
                      a template larger than 51200 bytes gives FAIL
+  memory render      scripts/aws-memory.py check for each config/memory/*.yaml;
+                     skip when the renderer or stage files are absent
+  memory stack       python3 scripts/test-memory-stack.py: schema and policy tests
+  memory deploy      python3 scripts/test-memory-deploy.py: offline administration tests
   shellcheck         each *.sh; under scripts/, each file with the first line
                      #!/bin/sh or #!/bin/bash; each file of scripts/git-hooks/
   compose            each file set of the contract as one Compose model, with
@@ -449,6 +459,8 @@ this script:
   storage            offline startup, systemd and Git ownership regressions
   verifier           offline deployed-service verifier regressions, for each file
                      set of the contract
+  macos             dedicated host/infra/bootstrap/credentials tests, standalone Compose,
+                    candidate JSON schema (jsonschema), and zsh syntax; no Mac runtime claim
   publish            development publish tests when present; skip in runtime exports
   scan               scripts/scan.sh tree
 
@@ -3601,6 +3613,7 @@ pick() {
 }
 
 pick templates -E '\.cfn\.ya?ml$'
+pick memory -E '^config/memory/[^/]+\.yaml$'
 pick sh -E '\.sh$'
 pick hooks -E '^scripts/git-hooks/[^/]+$'
 pick compose -E '(^|/)compose[^/]*\.ya?ml$'
@@ -3652,6 +3665,40 @@ else
     done 3<"$work/templates"
 fi
 
+# --- the memory render ------------------------------------------------------
+
+if [ ! -f scripts/aws-memory.py ]; then
+    result "memory render" skip "no scripts/aws-memory.py yet"
+elif [ ! -s "$work/memory" ]; then
+    result "memory render" skip "no stage files yet"
+elif ! command -v python3 >/dev/null 2>&1; then
+    no_tool "memory render" python3
+else
+    while IFS= read -r f <&3; do
+        stage=${f##*/}
+        stage=${stage%.yaml}
+        run "memory render $stage" python3 scripts/aws-memory.py check --stage "$stage"
+    done 3<"$work/memory"
+fi
+
+# --- the memory regression checks -------------------------------------------
+
+if [ ! -f scripts/test-memory-stack.py ]; then
+    result "memory stack" skip "no memory stack tests in this copy"
+elif ! command -v python3 >/dev/null 2>&1; then
+    no_tool "memory stack" python3
+else
+    run "memory stack" python3 scripts/test-memory-stack.py
+fi
+
+if [ ! -f scripts/test-memory-deploy.py ]; then
+    result "memory deploy" skip "no memory deploy tests in this copy"
+elif ! command -v python3 >/dev/null 2>&1; then
+    no_tool "memory deploy" python3
+else
+    run "memory deploy" python3 scripts/test-memory-deploy.py
+fi
+
 # --- the shell scripts ------------------------------------------------------
 
 # shell_group <check> <dialect or empty> <file>...
@@ -3676,6 +3723,14 @@ select_shellcheck
 LC_ALL=C sort -u "$work/sh" >"$work/scripts"
 set --
 while IFS= read -r f <&3; do
+    if [ "$f" = scripts/host-bootstrap-macos.sh ]; then
+        if command -v zsh >/dev/null 2>&1; then
+            run "zsh syntax $f" zsh -n "$f"
+        else
+            no_tool "zsh syntax $f" zsh
+        fi
+        continue
+    fi
     set -- "$@" "$f"
 done 3<"$work/scripts"
 shell_group "shellcheck shell scripts" "" "$@"
@@ -3702,6 +3757,16 @@ else
         compose_set_check "$set_options" $set_files
     done 3<"$work/sets"
     while IFS= read -r f <&3; do
+        if [ "$f" = compose.macos.yaml ]; then
+            if ! command -v docker >/dev/null 2>&1; then
+                no_tool "compose macos standalone" docker
+            elif ! command -v python3 >/dev/null 2>&1; then
+                no_tool "compose macos standalone" python3
+            else
+                run "compose macos standalone" python3 scripts/test-macos-compose.py
+            fi
+            continue
+        fi
         grep -qE "(^|[| ])$(printf '%s' "$f" | sed 's/[.]/[.]/g')( |\$)" "$work/sets" ||
             result "compose $f" FAIL "no file set of the contract holds this file"
     done 3<"$work/compose"
@@ -3839,6 +3904,21 @@ if [ -f scripts/test-storage.py ]; then
     run "storage regression" python3 -I scripts/test-storage.py
 else
     result "storage regression" skip "no storage tests in this copy"
+fi
+
+# --- Mac source checks; no host, VM, image build or cloud request -------------
+
+for test in host infra bootstrap credentials; do
+    if [ -f "scripts/test-macos-$test.py" ]; then
+        run "macos $test regression" python3 "scripts/test-macos-$test.py"
+    else
+        result "macos $test regression" skip "no Mac tests in this copy"
+    fi
+done
+if [ -f config/macos/machine.json ]; then
+    run "macos candidate schema" python3 -I scripts/check-macos-machine.py
+else
+    result "macos candidate schema" skip "no Mac candidate in this copy"
 fi
 
 # --- verifier regression checks ---------------------------------------------

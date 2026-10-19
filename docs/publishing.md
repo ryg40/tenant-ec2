@@ -16,6 +16,16 @@ The optional private exclusion list keeps owner decisions, credential records, s
 
 The public [credential reference](credentials.md) describes names, creation and scope. It contains no home inventory.
 
+## Variant inventory
+
+One portable snapshot contains both variants with one shared `kits.lock`.
+The reviewed set includes `compose.macos.yaml`, `ok-auth/oauth2-proxy.macos.cfg` and each listed `config/macos` asset.
+It also includes [Variants](variants.md) and the [Mac template reference](reference/host-template-macos.md).
+Scripts, templates and the candidate schema remain under the existing scripts directory rule.
+Development fixture files, private deployment state and the detailed security assessment remain excluded.
+An export check copies only candidate publish-set files to a temporary directory; it needs no branch, tag or snapshot ref.
+A clean export scan proves content checks, not Mac runtime qualification or approval to publish.
+
 ## Public reader rules
 
 The check rejects private tracker references, machine paths, host records and links to unpublished tracked files.

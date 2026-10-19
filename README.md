@@ -1,6 +1,8 @@
 # tenant-ec2
 
-An install kit for one Amazon Linux 2023 x86_64 EC2 host.
+An install kit with a default Linux variant and a conditional EC2 Mac variant.
+A variant selects the complete host design; [compare the variants](docs/variants.md) before installation.
+The default `homelab` variant runs on Amazon Linux 2023 x86_64.
 CloudFormation makes the host, its network, its storage and its identity.
 Docker Compose runs the services from the tags and commits in [kits.lock](kits.lock).
 
@@ -15,6 +17,11 @@ Read the [architecture](docs/architecture.md) for the service networks, the logi
 
 ## The core
 
+This core and the quick path describe `homelab`.
+The Mac design uses four services, Podman and an operator tunnel, with no public edge or OpenViking.
+Its agent remains disabled until the compatible AgentCore kit release and shared pin exist.
+Not verified: the Mac runtime on the selected EC2 AMI; source checks do not qualify it.
+
 | Part | Content |
 | --- | --- |
 | AWS | The provisioner, host-role boundary, VPC, security groups, EC2 instance, Elastic IP, EBS data volume, EFS access points and Secrets Manager secret. |
@@ -28,6 +35,8 @@ Read the [architecture](docs/architecture.md) for the service networks, the logi
 ## The options
 
 An option stays off until you select it. Do not edit a Compose file to select an option.
+
+Separate [memory stacks](docs/memory-stack.md) give each stage its own AgentCore memory, file bucket and people; an administrator deploys them.
 
 | Option | Switch | Page |
 | --- | --- | --- |
@@ -60,8 +69,12 @@ Not verified: a private agent-kit clone or a complete install with the agent on 
 
 | Page | Content |
 | --- | --- |
-| [Install](docs/install.md) | The core install, in order. |
+| [Variants](docs/variants.md) | Linux and Mac comparison, conditional install, accounts, tunnels, costs and release. |
+| [Mac host templates](docs/reference/host-template-macos.md) | Allocation/runtime ownership, parameters, outputs and guards. |
+| [Install](docs/install.md) | The homelab core install, in order. |
 | [Architecture](docs/architecture.md) | Five diagrams, with their Excalidraw scenes. |
+| [Memory stacks](docs/memory-stack.md) | Stage files, people, access rules, keys and the administrator flow. |
+| [Memory template](docs/reference/memory-template.md) | The generated resources, parameters and deploy commands. |
 | [Entra gate](docs/entra.md) | The application registration, group rule and login checks. |
 | [Options](docs/options/README.md) | The switches and the option pages. |
 | [Host template](docs/reference/host-template.md) | The AWS components, parameters and storage rules. |

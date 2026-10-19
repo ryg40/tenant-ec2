@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import plistlib
 from pathlib import Path
 import re
 import shutil
@@ -769,7 +770,7 @@ process.env.RESEARCHER_THINKING = @THINKING@;
 if (@PORT@ === null) delete process.env.PORT; else process.env.PORT = @PORT@;
 global.fetch = async (url, opts) => {
   if (opts.redirect !== 'manual' || !opts.signal) throw new Error('bad deadline or redirect policy');
-  if (!['http://127.0.0.1:80/readyz', 'http://127.0.0.1:5470/v1/'].includes(url)) throw new Error('bad URL');
+  if (!['http://127.0.0.1:80/readyz', 'http://127.0.0.1:4180/readyz', 'http://127.0.0.1:5470/v1/'].includes(url)) throw new Error('bad URL');
   if (@THROWS@) throw new Error('fixture-sensitive-error');
   return {status: @STATUS@};
 };
@@ -783,6 +784,8 @@ global.fetch = async (url, opts) => {
 
     def test_deployed_knowledge_readiness_missing_data_redirect_and_error(self):
         self.assertEqual(self.node(verify.OK_JS), 0)
+        self.assertEqual(self.node(verify.OK_JS, port="4180"), 0)
+        self.assertEqual(self.node(verify.OK_JS, port="4180", status=302), 1)
         self.assertEqual(self.node(verify.OK_JS, exists=False), 1)
         self.assertEqual(self.node(verify.OK_JS, status=503), 1)
         self.assertEqual(self.node(verify.OK_JS, status=302), 1)
@@ -943,6 +946,282 @@ class SsmTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.log.exists())
         self.assertIn("safe host directory name", result.stderr)
+
+
+@unittest.skipUnless((ROOT / "tests/fixtures/podman-5.6.2-inspect.json").is_file(),
+                     "no development Podman fixtures in this copy")
+class MacTests(StackFixture):
+    file_set = "compose.macos.yaml"
+    edge_names = ""
+
+    def setUp(self):
+        super().setUp()
+        shutil.copyfile(ROOT / "compose.macos.yaml", self.repo / "compose.macos.yaml")
+        self.machine = {"services": ["litellm", "litellm-db", "open-knowledge", "ok-auth"],
+                        "account": {"name": "xyz1000", "home": "/Users/xyz1000"}}
+        fixture = ROOT / "tests/fixtures/podman-5.6.2-inspect.json"
+        self.inspection = json.loads(fixture.read_text())[0]
+        self.accounts = []
+        self.mutate_inspect = lambda service, item: None
+
+    def docker(self, args, **kwargs):
+        self.calls.append((args, kwargs.get("input")))
+        self.assertEqual(kwargs["env"], dict(verify.MACOS_ENV, HOME="/Users/xyz1000",
+                                            USER="xyz1000", LOGNAME="xyz1000"))
+        self.assertEqual(kwargs["timeout"], 45)
+        if args[:2] == ["podman", "compose"]:
+            self.assertEqual(args[2:6], ["-p", "tenant-ec2-macos", "--env-file", "/Volumes/data/service.env"])
+            self.assertIn("/Volumes/data/runtime/compose.macos.yaml", args)
+            service = args[-1]
+            value = "" if service == self.down else f"{ALL_SERVICES.index(service) + 1:064x}"
+        elif args[:3] == ["podman", "container", "inspect"]:
+            item = json.loads(json.dumps(self.inspection))
+            item["Id"] = args[-1]
+            service = ALL_SERVICES[int(args[-1], 16) - 1]
+            if service != "ok-auth":
+                item["NetworkSettings"]["Ports"] = {"4000/tcp": None}
+            self.mutate_inspect(service, item)
+            value = json.dumps([item])
+        elif args[:2] == ["podman", "exec"]:
+            if self.exec_service(args) == self.fail_exec:
+                return subprocess.CompletedProcess(args, 1, "fixture-private-value", "fixture-private-value")
+            value = "fixture-private-value"
+        else:
+            self.fail("unexpected command: " + str(args))
+        return subprocess.CompletedProcess(args, 0, value, "")
+
+    def execute(self, *options):
+        original_read = Path.read_bytes
+        def read_bytes(path):
+            if str(path) == "/Volumes/data/runtime/compose.macos.yaml":
+                return original_read(self.repo / "compose.macos.yaml")
+            return original_read(path)
+        def machine(checker):
+            checker.machine = self.machine
+        def setting(checker, name):
+            return {"COMPOSE_FILE": self.file_set, "EC2_EDGE_NAMES": "", "EC2_VARIANT": "macos"}.get(name)
+        with patch.object(verify.Verifier, "macos_machine", machine), \
+                patch.object(verify.Verifier, "macos_accounts", lambda _: self.accounts.append(True)), \
+                patch.object(verify.Verifier, "host_setting", setting), patch.object(Path, "read_bytes", read_bytes):
+            return super().execute("--variant", "macos", "--engine", "podman", *options)
+
+    def required(self):
+        return [args[-1] for args, _ in self.calls if args[:2] == ["podman", "compose"]]
+
+    def execs(self):
+        return [(args, code) for args, code in self.calls if args[:2] == ["podman", "exec"]]
+
+    def test_subset_isolated_environment_no_excluded_kits_or_services(self):
+        self.mutate("kits.lock", lambda data: data.update(server_kits={
+            k: v for k, v in data["server_kits"].items() if k in self.machine["services"]}))
+        rc, out, err = self.execute("--file-set", self.file_set, "--edge-names", "")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(set(self.required()), set(self.machine["services"]))
+        self.assertEqual(len(self.execs()), 4)
+        self.assertTrue(self.accounts)
+        self.assertIn("AgentCore kit release", out)
+        text = json.dumps(self.calls)
+        for excluded in ("openviking", "pi-durable", "caddy", "pangolin", "newt", "copilot", "/healthz",
+                         "/v1/embeddings", "/v1/chat/completions", "--format"):
+            self.assertNotIn(excluded, text)
+
+    def test_variant_files_selection_and_profile_refuse_before_commands(self):
+        for args in (("--engine", "docker"), ("--variant", "homelab"),
+                     ("--file-set", "compose.yaml"), ("--file-set", "compose.macos.yaml:compose.copilot.yaml"),
+                     ("--edge-names", "ok")):
+            with self.subTest(args=args):
+                self.assertEqual(self.execute(*args)[0], 1)
+                self.assertFalse(self.calls)
+        self.machine["services"].append("pi-durable")
+        self.assertEqual(self.execute()[0], 1)
+        self.assertFalse(self.calls)
+
+    def test_missing_services_and_internal_failures_are_fatal_redacted(self):
+        for service in self.machine["services"]:
+            self.down = service
+            self.assertEqual(self.execute()[0], 1)
+            self.down = None
+            self.fail_exec = service
+            self.assertEqual(self.execute()[0], 1)
+            self.fail_exec = None
+
+    def test_machine_loader_uses_shared_schema_and_protected_inputs(self):
+        # The shared bootstrap parser owns schema/stage validation; this adapter must
+        # call it before checking the actual PIN execution account and service input.
+        machine = dict(self.machine, project="tenant-ec2")
+        forms = SimpleNamespace(CORE=self.machine["services"], text_file=lambda *a, **k: json.dumps(machine),
+                                machine_forms=lambda value, memory: None,
+                                service_settings=lambda text: {"COMPOSE_FILE": "compose.macos.yaml"},
+                                service_forms=lambda env, value: None)
+        checker = verify.Verifier(Path("/opt/tenant-ec2/macos/snapshot"), variant="macos", engine="podman",
+                                  project="tenant-ec2")
+        with patch.object(verify, "load_module", return_value=forms), \
+                patch.object(verify.sys, "platform", "darwin"), \
+                patch.object(verify.pwd, "getpwuid", return_value=SimpleNamespace(
+                    pw_name="xyz1000", pw_dir="/Users/xyz1000", pw_uid=501)), \
+                patch.object(forms, "text_file", wraps=forms.text_file) as read, \
+                patch.object(forms, "machine_forms", wraps=forms.machine_forms) as schema, \
+                contextlib.redirect_stdout(io.StringIO()):
+            checker.macos_machine()
+            schema.assert_called_once()
+            self.assertEqual(read.call_args_list[0].args, (Path("/etc/tenant-ec2/machine.json"),))
+            self.assertEqual(read.call_args_list[0].kwargs, {"public": True})
+            self.assertEqual(read.call_args_list[1].args, (Path("/Volumes/data/service.env"),))
+            self.assertEqual(checker.host_setting("COMPOSE_FILE"), "compose.macos.yaml")
+            with patch.object(forms, "machine_forms", side_effect=ValueError("fixture-private-value")):
+                with self.assertRaises(verify.Failure) as error:
+                    checker.macos_machine()
+                self.assertNotIn("fixture-private-value", str(error.exception))
+            with patch.object(verify.pwd, "getpwuid", return_value=SimpleNamespace(
+                    pw_name="root", pw_dir="/var/root", pw_uid=0)):
+                with self.assertRaises(verify.Failure):
+                    checker.macos_machine()
+            machine["project"] = "snapshot"
+            with self.assertRaises(verify.Failure):
+                checker.macos_machine()
+            machine["project"] = "tenant-ec2"
+            checker.repo = Path("/opt/tenant-ec2")
+            checker.project = verify.Verifier(checker.repo, variant="macos", engine="podman").project
+            read.reset_mock()
+            checker.macos_machine()
+            self.assertEqual(read.call_args_list[0].args, (Path("/etc/tenant-ec2/machine.json"),))
+
+    def test_project_cli_defaults_override_and_invalid_paths(self):
+        for variant, engine, repo, flags, expected in (
+                ("macos", "podman", "/opt/tenant-ec2/macos/snapshot", ["--project", "tenant-ec2"], "tenant-ec2"),
+                ("macos", "podman", "/opt/tenant-ec2", [], "tenant-ec2"),
+                ("homelab", "docker", str(self.repo), [], self.repo.name)):
+            out, err = io.StringIO(), io.StringIO()
+            with patch.object(verify.Verifier, "verify", autospec=True) as check, \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = verify.main(["--repo", repo, "--variant", variant, "--engine", engine, *flags])
+            self.assertEqual(code, 0, err.getvalue())
+            checker = check.call_args.args[0]
+            self.assertEqual(checker.project, expected)
+            self.assertEqual(checker.repo, Path(repo).resolve())
+        for value in ("", "..", "../private-fixture", "/private-fixture", "bad/name", "bad\nname", "x" * 32):
+            with self.subTest(value=value), patch.object(verify, "load_module") as load, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
+                code = verify.main(["--variant", "macos", "--engine", "podman", "--project", value])
+            self.assertEqual(code, 1)
+            self.assertEqual(err.getvalue(), "verify-deployed: FAIL - Mac project: invalid form\n")
+            load.assert_not_called()
+
+    def test_absent_host_file_set_is_not_inferred_from_machine_or_cli(self):
+        checker = verify.Verifier(self.repo, "compose.macos.yaml", "", "macos", "podman")
+        checker.env_file = self.repo / "service.env"
+        checker.env_file.write_text("EC2_VARIANT='macos'\n")
+        checker.machine = self.machine
+        with patch.object(checker, "macos_machine"), patch.object(checker, "run") as run:
+            with self.assertRaisesRegex(verify.Failure, "COMPOSE_FILE of the host is another file set"):
+                checker.verify()
+        run.assert_not_called()
+
+    def test_default_account_restrictions_fail_closed(self):
+        checker = verify.Verifier(self.repo, variant="macos", engine="podman")
+        checker.machine = self.machine
+        uid = os.geteuid()
+        record = {"RecordName": ["xyz1000"], "NFSHomeDirectory": ["/Users/xyz1000"],
+                  "UserShell": ["/bin/zsh"], "UniqueID": [str(uid)]}
+        def metadata(path):
+            directory = path.name in ("xyz1000", ".ssh")
+            return SimpleNamespace(st_mode=(0o040700 if directory else 0o100600), st_uid=uid, st_nlink=1)
+        for shell, policy in (("UserShell: /bin/zsh", "isDisabled=1"),
+                              ("UserShell: /usr/bin/false", "isDisabled=0"),
+                              ("UserShell: /usr/bin/false", "fixture-private-value")):
+            def command(args, label):
+                if "-plist" in args:
+                    return plistlib.dumps(record).decode()
+                if "checkmember" in args:
+                    return "yes member"
+                if "-list" in args:
+                    return "ec2-user"
+                return policy if "-getpolicy" in args else shell
+            with patch.object(checker, "run", command), patch.object(Path, "lstat", metadata), \
+                    contextlib.redirect_stdout(io.StringIO()), self.assertRaises(verify.Failure):
+                checker.macos_accounts()
+
+    def test_podman_shapes_and_health_are_strict(self):
+        self.assertEqual(verify.podman_state(json.dumps([self.inspection])), self.inspection)
+        for value in ({}, [], [self.inspection, self.inspection], [None], "private", None):
+            with self.assertRaises(verify.Failure):
+                verify.podman_state(json.dumps(value))
+        for key, value in (("Health", None), ("Health", {}), ("Health", {"Status": "starting"}),
+                           ("Running", "true"), ("Running", 1), ("Paused", True), ("Restarting", True),
+                           ("Dead", True), ("OOMKilled", True), ("Status", "exited")):
+            item = json.loads(json.dumps(self.inspection))
+            item["State"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(verify.Failure):
+                verify.podman_state(json.dumps([item]))
+        with self.assertRaises(verify.Failure):
+            verify.podman_state('[{"State":{},"State":{}}]')
+        self.inspection["State"].pop("Health")
+        self.assertEqual(self.execute()[0], 1)
+        self.assertFalse(self.execs())
+
+    def test_publication_failures_and_host_network_refuse_before_probes(self):
+        for host in ("0.0.0.0", "", "::", "127.0.0.2"):
+            self.inspection["NetworkSettings"]["Ports"]["4180/tcp"][0]["HostIp"] = host
+            self.assertEqual(self.execute()[0], 1)
+            self.assertFalse(self.execs())
+        self.inspection["NetworkSettings"]["Ports"]["4180/tcp"][0]["HostIp"] = "127.0.0.1"
+        def extra(service, item):
+            if service == "litellm":
+                item["NetworkSettings"]["Ports"] = {"4000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "4000"}]}
+        self.mutate_inspect = extra
+        self.assertEqual(self.execute()[0], 1)
+        self.assertFalse(self.execs())
+        self.mutate_inspect = lambda service, item: item["HostConfig"].update(NetworkMode="host")
+        self.assertEqual(self.execute()[0], 1)
+
+    def test_account_metadata_no_key_content_or_password_reads(self):
+        checker = verify.Verifier(self.repo, variant="macos", engine="podman")
+        checker.machine = self.machine
+        uid = os.geteuid()
+        record = {"RecordName": ["xyz1000"], "NFSHomeDirectory": ["/Users/xyz1000"],
+                  "UserShell": ["/bin/zsh"], "UniqueID": [str(uid)]}
+        calls = []
+        def command(args, label):
+            calls.append(args)
+            if "-plist" in args:
+                return plistlib.dumps(record).decode()
+            if "checkmember" in args:
+                return "yes xyz1000 is a member of admin"
+            if "-list" in args:
+                return "ec2-user\nssm-user\nxyz1000"
+            if "-getpolicy" in args:
+                return "isDisabled=1"
+            return "UserShell: /usr/bin/false"
+        def metadata(path):
+            directory = path.name in ("xyz1000", ".ssh")
+            mode = (0o040000 | 0o700) if directory else (0o100000 | 0o600)
+            return SimpleNamespace(st_mode=mode, st_uid=uid, st_nlink=1)
+        with patch.object(checker, "run", command), patch.object(Path, "lstat", metadata), \
+                patch.object(Path, "read_text", side_effect=AssertionError("no file content read")), \
+                contextlib.redirect_stdout(io.StringIO()):
+            checker.macos_accounts()
+            record["UserShell"] = ["/bin/bash"]
+            with self.assertRaises(verify.Failure):
+                checker.macos_accounts()
+        self.assertNotIn("AuthenticationAuthority", json.dumps(calls))
+        self.assertNotIn("-getglobalpolicy", json.dumps(calls))
+        self.assertTrue(all("-read" not in args or args[-1] in ("UniqueID", "UserShell") for args in calls))
+
+    def test_tunnel_does_not_follow_redirect_or_expose_location(self):
+        url = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/oauth2/v2.0/authorize?state=fixture-private-value"
+        for status, target, expected in ((302, url, 0), (200, url, 1), (302, "https://evil.invalid/", 1)):
+            response = urllib.error.HTTPError("http://localhost:4180/", status, "fixture-private-value",
+                                              {"Location": target}, io.BytesIO(b"fixture-private-value"))
+            opener = SimpleNamespace(open=lambda *a, **k: response)
+            out, err = io.StringIO(), io.StringIO()
+            with patch.object(urllib.request, "build_opener", return_value=opener) as builder, \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = verify.main(["--variant", "macos", "--engine", "podman", "--tunnel-check"])
+            self.assertEqual(rc, expected)
+            self.assertNotIn("fixture-private-value", out.getvalue() + err.getvalue())
+            handlers = builder.call_args.args
+            self.assertEqual(handlers[0].proxies, {})
+            self.assertIsNone(handlers[1].redirect_request(None, None, 302, "", {}, url))
 
 
 if __name__ == "__main__":

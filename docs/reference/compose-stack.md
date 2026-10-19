@@ -9,6 +9,25 @@ Only the edge publishes ports; a service network joins only services that need e
 A network that needs no internet is `internal`.
 Services drop all capabilities except those explicitly needed by the edge.
 
+## Mac standalone model
+
+`EC2_VARIANT=macos` uses `compose.macos.yaml` alone, never as a Linux overlay.
+Its four unprofiled services are `litellm`, `litellm-db`, `open-knowledge` and `ok-auth`.
+The fifth declaration, `pi-durable`, stays behind disabled profile `agentcore-pending` until the compatible AgentCore release and pin exist.
+It has no OpenViking, Caddy, Pangolin, Newt, Copilot or public DNS dependency.
+Only the gate publishes `127.0.0.1:4180:4180`; the browser uses an encrypted operator tunnel.
+OpenKnowledge listens internally on port 4180 to preserve that origin through the gate.
+
+All service images target `linux/arm64`. Support-image digest pins remain shared with `kits.lock`.
+Application data uses guest named volumes. Explicit runtime mounts are read-only and exclude the developer home and engine socket.
+Host-role credentials enter separate read-only guest directories through the temporary credential bridge, not Compose key variables.
+The verifier uses the staged runtime Compose copy and the exact host `COMPOSE_FILE`.
+It checks only the selected subset and its kit pins.
+
+Docker Compose config is the development parser, with isolated stub values; this does not prove Podman runtime semantics.
+Not verified: ARM64 image startup, guest ownership, host loopback forwarding, Entra login or WebSockets.
+See [Variants](../variants.md), [Mac templates](host-template-macos.md) and [Mac runtime qualification](../../config/macos/README.md).
+
 ## File sets
 
 The bootstrap writes `COMPOSE_FILE` into the host environment file from `EC2_OPTIONS`.

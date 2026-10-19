@@ -12,8 +12,13 @@ The files and instructions that build a host from pinned kits.
 It includes a core and optional parts.
 _Avoid_: deployment bundle, host package
 
+**Variant**:
+A complete host design selected by `EC2_VARIANT`: homelab or macos.
+It is not a Compose overlay.
+_Avoid_: platform option, Mac overlay
+
 **Core**:
-The parts that every install needs, without any option.
+The services required by the selected variant, without any option.
 _Avoid_: base bundle, default tier
 
 **Option**:
@@ -57,14 +62,34 @@ _Avoid_: cloud box, cloud node
 The CloudFormation stack that makes the host, network, storage and identity.
 _Avoid_: cloud environment, infrastructure bundle
 
+**Dedicated Host**:
+Physical EC2 capacity reserved for one AWS account.
+For Mac, stopping the instance does not release this billed allocation.
+_Avoid_: stopped server, instance rental
+
+**Podman machine**:
+The Linux virtual machine that runs containers for the macOS Podman client.
+It belongs to the PIN account and has explicit storage mounts.
+_Avoid_: Docker daemon, Mac container
+
+**Actor**:
+The identity named by `actorId` in memory namespaces.
+A person actor differs from the host service actor and from the PIN-derived operating-system account.
+_Avoid_: PIN identity, login password
+
 **Provisioner**:
 The scoped AWS identity that makes or changes the stack from the development machine.
 It is not an administrator.
 _Avoid_: deploy user, admin key
 
-**Boundary**:
-The permissions limit that each instance role must obey in addition to its own policy.
+**Permissions boundary**:
+The maximum permissions that an identity policy can grant to an IAM user or role.
+It grants no permission by itself.
 _Avoid_: guard policy, limit policy
+
+**Boundary**:
+The short form of permissions boundary for a host role or memory-stack user.
+_Avoid_: permission grant, access policy
 
 **Instance role**:
 The AWS identity that gives the host its AWS rights without a stored access key.
@@ -93,6 +118,26 @@ The optional daily data-volume snapshots, host logs and billing alarm.
 The private bucket has a separate switch.
 _Avoid_: monitoring bundle, operations tier
 
+### Shared memory
+
+**Stage**:
+A separate environment for shared memory: development, test or production.
+_Avoid_: memory tier, namespace group
+
+**Memory stack**:
+The administrator-owned set of shared memory, optional file storage and user permissions for one stage.
+It is separate from the host stack and its OpenViking service.
+_Avoid_: memory server, shared host stack
+
+**Namespace**:
+A path that groups memory records and defines their access scope.
+_Avoid_: memory folder, memory database
+
+**PIN**:
+A person number with the form `XYZ` followed by four digits.
+It is not a credential or a login factor.
+_Avoid_: password, access code, authentication PIN
+
 ### Storage
 
 **Data volume**:
@@ -111,7 +156,7 @@ _Avoid_: storage share, shared mount
 
 **Durable mount**:
 A mounted data volume or access point that must be available before Docker starts.
-The host needs four durable mounts.
+The homelab host needs four durable mounts. The Mac variant instead requires its identified APFS data volume.
 _Avoid_: persistent folder, storage directory
 
 **Snapshot**:
