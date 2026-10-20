@@ -3,7 +3,7 @@
 | Remote | Points at | Receives | Push |
 | --- | --- | --- | --- |
 | `origin` | The private development repository on the installer's Gitea server (configure its URL locally) | `local-dev`, topic branches and their tags | Permitted for development work. |
-| `github` | The private snapshot repository on GitHub (configure its URL locally) | Only the local branch `portable` as the remote branch `main`, and the tags `portable/*` | Only through `scripts/publish_portable.py --push`, with the approval of the owner. |
+| `github` | The snapshot repository on GitHub, private by default (configure its URL locally) | Only the local branch `portable` as the remote branch `main`, and the tags `portable/*` | Only through `scripts/publish_portable.py --push`, with the approval of the owner. |
 
 The pre-push hook refuses each other ref toward every remote except `origin`, also with `--all`, `--tags`, `--follow-tags` or `--mirror`.
 
@@ -17,3 +17,4 @@ scripts/install-hooks.sh
 ```
 
 Keep the GitHub repository private. The publish command asks `gh` for the visibility and refuses a repository that is not private.
+Only `--allow-public` permits a public repository. That option records a decision of the owner, not a content review.

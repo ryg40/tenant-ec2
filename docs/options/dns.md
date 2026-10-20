@@ -26,7 +26,7 @@ llm.ec2.example.com. 600 IN A 203.0.113.10
 
 ## The settings
 
-Each setting is a name of the environment file `.env` of the development machine. The scripts read these names from the file only, never from the shell environment.
+Each setting is a name of the environment file `.env` of the development machine. `scripts/dns-records.sh` reads these names from the file only, never from the shell environment. `scripts/aws-host.sh` reads the three option settings from the file only; it reads `EC2_DOMAIN` from the file first, then from the shell environment.
 
 | Name | Values | Default |
 | --- | --- | --- |
@@ -176,7 +176,7 @@ A name with more than one A record stops the script. Delete each record but one 
 
 ## The option pangolin
 
-The Pangolin edge makes one wildcard certificate with the DNS-01 challenge through Porkbun. So the option `pangolin` needs `EC2_DNS_PROVIDER=porkbun`, and each script stops with another provider. The page [Pangolin edge](pangolin.md) gives the steps of the option.
+The Pangolin edge makes one wildcard certificate with the DNS-01 challenge through Porkbun. So the option `pangolin` needs `EC2_DNS_PROVIDER=porkbun`. `scripts/aws-host.sh` and `scripts/dns-records.sh` stop with another provider; the bootstrap requires the Porkbun pair. The page [Pangolin edge](pangolin.md) gives the steps of the option.
 
 Porkbun must answer for the domain before the certificate can exist. When another provider answers for it, move the complete zone first: the page [DNS migration](../reference/dns-migration.md) gives the procedure.
 

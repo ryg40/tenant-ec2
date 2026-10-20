@@ -104,7 +104,15 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(a.stdout, b.stdout)
         self.assertEqual(before, tree())
         self.assertIn('agentcore-pending disabled', a.stdout)
-        self.assertLess(a.stdout.index('verify account then restrict'), a.stdout.index('applehv'))
+        # The first phase stops before the lockdown; only --lockdown plans the restriction.
+        self.assertLess(a.stdout.index('verify account'), a.stdout.index('stop with lockdown pending'))
+        self.assertLess(a.stdout.index('stop with lockdown pending'), a.stdout.index('applehv'))
+        self.assertNotIn('restrict default logins', a.stdout)
+        c = self.run_boot('--dry-run', '--root', str(self.work), '--lockdown')
+        self.assertLess(c.stdout.index('verify account'), c.stdout.index('restrict default logins once'))
+        self.assertLess(c.stdout.index('restrict default logins once'), c.stdout.index('applehv'))
+        self.assertNotIn('stop with lockdown pending', c.stdout)
+        self.assertEqual(before, tree())
         self.assertFalse((self.work / 'Users').exists())
 
     def test_stdin_and_rendered_environment_are_equivalent(self):
@@ -365,6 +373,59 @@ class RuntimeTest(unittest.TestCase):
             self.boot.disk(format_allowed=False)
         self.assertFalse(any('eraseDisk' in args for args, _ in self.calls))
 
+    def test_replay_after_stop_inside_format_never_formats_twice(self):
+        # Stop after eraseDisk and before the volume record: the replay continues on format intent.
+        a, b = self.disk_fixture(formatted=True)
+        self.boot.record.pop('volumeUUID')
+        self.boot.record['formatIntent'] = self.machine['disk']['volumeId']
+        with a, b:
+            self.boot.disk()
+        self.assertFalse(any('eraseDisk' in args for args, _ in self.calls))
+        self.assertEqual(self.boot.record['volumeUUID'], 'fixture-volume')
+        # Stop inside eraseDisk with a partial layout: the replay refuses and never formats.
+        self.calls.clear()
+        a, b = self.disk_fixture(unrelated=True)
+        self.boot.record.pop('volumeUUID', None)
+        self.boot.record['formatIntent'] = self.machine['disk']['volumeId']
+        with a, b, self.assertRaisesRegex(self.runtime.Invalid, 'disk-not-blank'):
+            self.boot.disk()
+        self.assertFalse(self.calls)
+
+    def test_kit_source_incomplete_refuses_without_clone_build_or_delete(self):
+        self.boot.data.mkdir(parents=True)
+        source = self.boot.data / 'sources/litellm'
+        (source / '.git').mkdir(parents=True)
+        def user(args, allow_failure=False, **kwargs):
+            self.calls.append((args, kwargs))
+            failed = args[-2:] == ['rev-parse', 'HEAD']
+            self.assertTrue(allow_failure or not failed)
+            return subprocess.CompletedProcess(args, 128 if failed else 0, b'', b'')
+        with patch.object(self.boot, 'user', side_effect=user):
+            with self.assertRaisesRegex(self.runtime.Invalid, '^kit-source-incomplete$'):
+                self.boot.build_kits()
+        self.assertEqual([args[-2:] for args, _ in self.calls], [['rev-parse', 'HEAD']])
+        self.assertTrue((source / '.git').is_dir())
+
+    def test_held_lock_reports_static_busy_code(self):
+        import contextlib
+        import fcntl
+        import io
+        lock = self.work / 'bootstrap.lock'
+        holder = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        stderr = io.StringIO()
+        try:
+            with patch.object(self.runtime, 'LOCK', str(lock)), patch.object(self.runtime, 'python_dependency'), \
+                    patch.object(self.runtime, 'inputs', return_value=(self.machine, {})), \
+                    patch.object(self.runtime.sys, 'platform', 'darwin'), patch.object(self.runtime.os, 'geteuid', return_value=0), \
+                    patch.object(self.runtime, 'Bootstrap', side_effect=AssertionError('second bootstrap')), \
+                    patch.object(self.runtime.sys, 'argv', ['bootstrap-runtime.py', '--machine', str(self.work / 'machine.json')]), \
+                    contextlib.redirect_stderr(stderr):
+                self.assertEqual(self.runtime.main(), 1)
+        finally:
+            os.close(holder)
+        self.assertEqual(stderr.getvalue(), 'macos bootstrap: bootstrap-busy\n')
+
     def test_account_create_once_password_and_owner_key(self):
         self.boot.identity()
         home = self.work / 'Users/xyz1000'
@@ -575,14 +636,44 @@ assert not os.access(repo / '.git', os.R_OK | os.X_OK)
 
     def test_apply_order(self):
         events = []
-        names = ('identity', 'snapshot_access', 'disk', 'account_setup', 'account_lockdown', 'tools', 'machine_start',
+        names = ('snapshot_access', 'disk', 'account_setup', 'account_lockdown', 'tools', 'machine_start',
                  'stage_runtime', 'build_kits', 'services', 'launchd')
         from contextlib import ExitStack
-        with ExitStack() as stack:
-            for name in names:
-                stack.enter_context(patch.object(self.boot, name, side_effect=lambda n=name: events.append(n)))
-            self.boot.apply()
-        self.assertEqual(events, list(names))
+        def apply(boot, failing=None, **kwargs):
+            # identity is real: it reads and writes the state record of the lockdown gate.
+            events.clear()
+            def step(name):
+                events.append(name)
+                if name == failing:
+                    raise self.runtime.Invalid('command-failed')
+            with ExitStack() as stack:
+                for name in names:
+                    stack.enter_context(patch.object(boot, name, side_effect=lambda n=name: step(n)))
+                return boot.apply(**kwargs)
+        def saved(boot):
+            return json.loads((boot.state / 'state.json').read_text()).get('lockdown')
+        first = ['snapshot_access', 'disk', 'account_setup']
+        # An approval without an earlier first phase is refused before any step.
+        fresh = self.runtime.Bootstrap(self.machine, {}, runner=self.boot.call, root=self.work)
+        with self.assertRaisesRegex(self.runtime.Invalid, '^lockdown-not-pending$'):
+            apply(fresh, lockdown=True)
+        self.assertEqual((events, saved(fresh)), ([], None))
+        # The first phase stops after the account readback, and a repeat stops there again.
+        for _ in range(2):
+            self.assertFalse(apply(self.boot))
+            self.assertEqual((events, saved(self.boot)), (first, 'pending'))
+        # A stop inside the lockdown keeps the pending marker; the approval can run again.
+        with self.assertRaisesRegex(self.runtime.Invalid, 'command-failed'):
+            apply(self.boot, failing='account_lockdown', lockdown=True)
+        self.assertEqual((events, saved(self.boot)), (first + ['account_lockdown'], 'pending'))
+        self.assertTrue(apply(self.boot, lockdown=True))
+        self.assertEqual((events, saved(self.boot)), (list(names), 'done'))
+        # The lockdown runs once: a second approval is refused, a replay continues without it.
+        with self.assertRaisesRegex(self.runtime.Invalid, '^lockdown-already-done$'):
+            apply(self.boot, lockdown=True)
+        self.assertEqual(events, [])
+        self.assertTrue(apply(self.boot))
+        self.assertEqual(events, [n for n in names if n != 'account_lockdown'])
         events.clear()
         with ExitStack() as stack:
             for name in ('identity', 'snapshot_access', 'disk', 'account_readback', 'machine_start', 'stage_runtime', 'services'):
@@ -591,6 +682,42 @@ assert not os.access(repo / '.git', os.R_OK | os.X_OK)
         self.assertEqual(events[1], ('snapshot_access', {}))
         self.assertEqual(events[2], ('disk', {'format_allowed': False}))
         self.assertEqual(events[4], ('machine_start', {'initialize': False}))
+
+    def test_main_exit_code_and_lockdown_flag(self):
+        import contextlib
+        import io
+        calls = []
+        class Fake:
+            def __init__(self, *args):
+                pass
+            def apply(self, lockdown=False):
+                calls.append(lockdown)
+                return lockdown
+            def resume(self):
+                calls.append('resume')
+        real_fstat = os.fstat
+        def fstat(fd):
+            # The lock check needs a root-owned file; the test may run as another user.
+            info = real_fstat(fd)
+            return os.stat_result((info.st_mode, info.st_ino, info.st_dev, info.st_nlink, 0, info.st_gid,
+                                   info.st_size, info.st_atime, info.st_mtime, info.st_ctime))
+        def main(*flags):
+            stderr = io.StringIO()
+            argv = ['bootstrap-runtime.py', '--machine', str(self.work / 'machine.json'), *flags]
+            with patch.object(self.runtime, 'LOCK', str(self.work / 'bootstrap.lock')), \
+                    patch.object(self.runtime, 'python_dependency'), \
+                    patch.object(self.runtime, 'inputs', return_value=(self.machine, {})), \
+                    patch.object(self.runtime.sys, 'platform', 'darwin'), patch.object(self.runtime.os, 'geteuid', return_value=0), \
+                    patch.object(self.runtime.os, 'fstat', side_effect=fstat), patch.object(self.runtime, 'Bootstrap', Fake), \
+                    patch.object(self.runtime.sys, 'argv', argv), contextlib.redirect_stderr(stderr):
+                return self.runtime.main(), stderr.getvalue()
+        # Exit 3 names a first phase that stopped before the lockdown; the stage reads it.
+        self.assertEqual(main(), (self.runtime.LOCKDOWN_PENDING, ''))
+        self.assertEqual(self.runtime.LOCKDOWN_PENDING, 3)
+        self.assertEqual(main('--lockdown'), (0, ''))
+        self.assertEqual(main('--resume'), (0, ''))
+        self.assertEqual(main('--resume', '--lockdown'), (1, 'macos bootstrap: lockdown-with-resume\n'))
+        self.assertEqual(calls, [False, True, 'resume'])
 
     def test_guest_writer_and_isolated_user_environment(self):
         compile(self.runtime.GUEST_CREDENTIAL_WRITER, '<guest-writer>', 'exec')

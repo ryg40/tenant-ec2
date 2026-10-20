@@ -30,7 +30,7 @@ Not verified: each other step of this page.
 
 | Place | Written by | Read by |
 | --- | --- | --- |
-| `EC2_DOMAIN` of the private environment file | The operator. | `secret`, `deploy`, `dns`, `verify` and `scripts/entra-app.sh`. |
+| `EC2_DOMAIN` of the private environment file | The operator. | `secret`, `deploy`, `dns` and `scripts/entra-app.sh`. |
 | `EC2_DOMAIN` of the secret `<Project>/env` | `scripts/aws-host.sh secret`. It is a name of Part 1 of `.env.example`. | The bootstrap, when it renders the host environment file. |
 | `EC2_DOMAIN` of the host environment file `/srv/data/<project>/.env` | The bootstrap, at each run. | Compose (`compose.yaml`), `scripts/render-pangolin.sh` and `caddy/start.sh`. The file is on the data volume, so a new instance finds the old file until the bootstrap writes it again. |
 | The stack parameter `Domain` | `deploy`. | The user data only. It writes the value as `EC2_DOMAIN` into `/etc/<project>/stack.env` at the first boot. |
@@ -227,7 +227,7 @@ So run `deploy` from the host clone. Its template is the template of the stack, 
 Each block of sections 2 to 4 that runs on the development machine runs in this one shell.
 Go to the host clone first. Then start one new shell with the command `sh`.
 A failed command then ends that shell, not your login shell.
-The blocks need a POSIX shell, `python3`, `dig`, `openssl` and the AWS CLI version 2.
+The blocks need a POSIX shell, `python3`, `dig`, `openssl`, `curl`, `envsubst` from gettext and the AWS CLI version 2.
 
 ```sh
 set +x
@@ -337,6 +337,7 @@ scripts/aws-host.sh --dry-run --env-file "$move_env" deploy
 Each line must name the new subtree and the stack address.
 The dry run makes no AWS call. Its `Domain` must be the new subtree.
 Each other parameter must equal the current stack parameter, also `SnapshotTag` and `SnapshotCommit`. Compare them privately.
+`SshPublicKey` is a `NoEcho` parameter: the dry run shows a stand-in and the stack shows a mask. Compare the public key file with your private record instead.
 
 The third block makes one change set with the stack template and the previous values, except `Domain`.
 It reads the change set and deletes it. It changes no resource.
@@ -406,7 +407,7 @@ The running edge has no route for the new names yet. A request to them gets no s
 scripts/aws-host.sh --env-file "$move_env" dns
 ```
 
-The command reads each record at Porkbun first. It makes each record that is not there. It deletes no record.
+For each name, the command reads the record at Porkbun first. It makes a record that is not there and edits a record with another address. It deletes no record.
 A refused first read stops the command before a write. That read proves the access of the pair to the new parent domain.
 The expected result is one line `done (create)` for each host record. A new try after a way back gives `no change`.
 
@@ -1039,7 +1040,7 @@ Step 2.1 and the dry run of step 2.2 make no call and need no row.
 
 ## 8. Not verified
 
-One run of variant C on one stack ran the change set of step 2.2, the steps 2.4 to 2.7, the bootstrap repeat of section 3.3 and the checks of section 4.
+One run of variant C on one stack ran the change set of step 2.2, the first read of step 2.3, the steps 2.4 to 2.7, the bootstrap repeat of section 3.3 and the checks 3 to 6 of section 4.
 No replacement and no restart ran.
 
 Proven on one stack, by one run of variant C:

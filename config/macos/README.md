@@ -12,9 +12,15 @@ Do not enable that profile with the current lock.
 `--dry-run` prints static planned steps. `--root` selects a read-only filesystem fixture.
 Native execution requires root on macOS. Linux execution refuses mutation.
 Each failed precondition prints a static reason, not command output or secret values.
+One native run holds the bootstrap lock. A second run while it is held stops with `bootstrap-busy`.
+Without `--lockdown`, a native run stops after the account readback, records `lockdown pending` and exits with code 3.
+`--lockdown` approves the account lockdown. It refuses without that record (`lockdown-not-pending`) and after a lockdown (`lockdown-already-done`).
+After the lockdown, a run without `--lockdown` continues and does not repeat it. `--resume` refuses `--lockdown`.
+A kit source without a readable commit stops with `kit-source-incomplete`; the bootstrap does not delete it.
 
-The snapshot entrypoint clones the approved tag and verifies its commit before calling this script.
-It writes `/etc/<project>/machine.json` as root, group admin, mode `0644`, without service secrets.
+The first-boot stage of the user data clones the approved tag and verifies its commit before calling this script.
+`scripts/aws-host.sh host-bootstrap --apply` replays that stage after the environment secret is written. See [First-boot replay](../../docs/variants.md#first-boot-replay).
+The user data writes `/etc/<project>/machine.json` as root, group admin, mode `0644`, without service secrets.
 Use `--machine` for a nondefault project path. The default is `/etc/tenant-ec2/machine.json`.
 The fields are `schemaVersion`, `project`, `variant`, `region`, `engine`, `fileSet`, `services`, `account`, `disk`, `memory` and `podman`.
 Unknown fields fail, including nested fields. The PIN matches exactly one active person in the selected stage.
@@ -52,12 +58,13 @@ The bounded prompt loop discards output and refuses an administrator-password pr
 The owner retrieves the secret through the administrator profile and changes the password at first login.
 
 The `dscl` readback checks the name, home, shell, identifiers and admin membership before default-account restrictions.
+The restrictions wait for `--lockdown`, after the operator check of the PIN login. See [Recovery check before the lockdown](../../docs/variants.md#recovery-check-before-the-lockdown).
 The sole owner public key uses a `0700` directory and `0600` file with PIN-account ownership.
 Existing `.zshrc` content survives repeat runs. New files initialize Homebrew's zsh environment.
 The account policy requires password history, minimum length and a first-login change.
 Repeat runs do not reset the account password or expire it again.
-SSH permits the PIN account only, with root and password login disabled.
-The bootstrap disables guest and automatic login, sets screen-lock preferences and disables default interactive accounts.
+After the lockdown, SSH permits the PIN account only, with root and password login disabled.
+The lockdown disables guest and automatic login, sets screen-lock preferences and disables default interactive accounts.
 A root-owned SSH restriction still excludes default users if an initialization module recreates their keys.
 An unresolved passwordless sudo rule fails the check instead of silently weakening the policy.
 

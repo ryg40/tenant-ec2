@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The Mac variant on AWS",
+    "output": "aws-mac.html",
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "cloud": {
+          "label": "Compute: the Mac and its containers"
+        },
+        "backend": {
+          "label": "Storage"
+        },
+        "security": {
+          "label": "Identity and secrets"
+        },
+        "frontend": {
+          "label": "AI models"
+        },
+        "messagebus": {
+          "label": "Access and operations"
+        },
+        "external": {
+          "label": "Outside AWS"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "idp_entra",
+      "type": "external",
+      "label": "Microsoft Entra ID",
+      "sublabel": "sign-in and group rule",
+      "pos": [
+        580,
+        30
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "web_browser",
+      "type": "external",
+      "label": "Your browser",
+      "sublabel": "http://localhost:4180",
+      "pos": [
+        60,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "term_tunnel",
+      "type": "external",
+      "label": "Your terminal",
+      "sublabel": "aws-host.sh tunnel --apply",
+      "pos": [
+        60,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "ssm_session",
+      "type": "messagebus",
+      "label": "Systems Manager",
+      "sublabel": "encrypted tunnel",
+      "pos": [
+        318,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "gate_okauth",
+      "type": "security",
+      "label": "Entra gate",
+      "sublabel": "127.0.0.1:4180 only",
+      "pos": [
+        580,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_ok",
+      "type": "cloud",
+      "label": "OpenKnowledge",
+      "sublabel": "no published port",
+      "pos": [
+        760,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_agent",
+      "type": "cloud",
+      "label": "pi-durable agent",
+      "sublabel": "off until the kit release",
+      "pos": [
+        560,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_llm",
+      "type": "cloud",
+      "label": "LiteLLM gateway",
+      "sublabel": "model routes, Postgres",
+      "pos": [
+        740,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "ebs_data",
+      "type": "backend",
+      "label": "Amazon EBS",
+      "sublabel": "encrypted, APFS data",
+      "pos": [
+        560,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "dh_mac",
+      "type": "cloud",
+      "label": "EC2 Mac instance",
+      "sublabel": "macOS, one PIN account",
+      "pos": [
+        740,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "bedrock_models",
+      "type": "frontend",
+      "label": "Amazon Bedrock",
+      "sublabel": "Luna and embeddings",
+      "pos": [
+        1030,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "sm_secret",
+      "type": "security",
+      "label": "Secrets Manager",
+      "sublabel": "macos/env, macos/generated",
+      "pos": [
+        1030,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Your computer",
+      "wraps": [
+        "web_browser",
+        "term_tunnel"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "AWS Cloud",
+      "wraps": [
+        "ssm_session",
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_llm",
+        "ebs_data",
+        "dh_mac",
+        "bedrock_models",
+        "sm_secret"
+      ],
+      "pad": 90
+    },
+    {
+      "kind": "region",
+      "label": "VPC",
+      "wraps": [
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_llm",
+        "ebs_data",
+        "dh_mac"
+      ],
+      "pad": 72
+    },
+    {
+      "kind": "region",
+      "label": "Dedicated Host",
+      "wraps": [
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_llm",
+        "ebs_data",
+        "dh_mac"
+      ],
+      "pad": 52
+    },
+    {
+      "kind": "region",
+      "label": "Podman machine",
+      "wraps": [
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_llm"
+      ],
+      "pad": 32
+    }
+  ],
+  "connections": [
+    {
+      "from": "web_browser",
+      "to": "term_tunnel",
+      "label": "localhost",
+      "variant": "emphasis",
+      "labelAt": [
+        135,
+        456
+      ]
+    },
+    {
+      "from": "term_tunnel",
+      "to": "ssm_session",
+      "label": "port forward",
+      "variant": "emphasis"
+    },
+    {
+      "from": "ssm_session",
+      "to": "gate_okauth",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "from": "gate_okauth",
+      "to": "svc_ok",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gate_okauth",
+      "to": "idp_entra",
+      "label": "sign-in",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        655,
+        190
+      ]
+    },
+    {
+      "from": "svc_llm",
+      "to": "bedrock_models",
+      "label": "models"
+    },
+    {
+      "from": "dh_mac",
+      "to": "sm_secret",
+      "label": "read at first boot"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "What costs money",
+      "items": [
+        "The Dedicated Host, from allocation to release, with 24 billed hours at least",
+        "Planning rate: USD 0.878 per hour for mac2-m2 in us-east-1; confirm it before each allocation",
+        "The EBS volume, the two secrets and the public IPv4 address",
+        "Bedrock, for each model request"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "How you reach it",
+      "items": [
+        "Run scripts/aws-host.sh tunnel --apply on your computer and keep it open",
+        "Open http://localhost:4180 and sign in with Microsoft Entra ID",
+        "The Mac takes no inbound connection: the tunnel runs through Systems Manager"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "What runs",
+      "items": [
+        "Four services in a Podman machine: the gate, OpenKnowledge, LiteLLM and Postgres",
+        "The agent stays off until a compatible kit release and pin",
+        "No public edge, no OpenViking, no option and no public DNS"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Sign-ins and keys",
+      "items": [
+        "One local administrator account, named by a PIN",
+        "The containers get temporary instance-role credentials through the credential bridge",
+        "No personal memory key on the Mac"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Not verified",
+      "items": [
+        "The Mac runtime on the selected AMI: applehv, guest networking and the credential bridge",
+        "A live install of the Mac variant"
+      ]
+    }
+  ]
+}

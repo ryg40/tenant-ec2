@@ -39,7 +39,7 @@ Compose supplies the Pangolin secret to `pangolin` and the Porkbun pair to `trae
 
 ## Names, gates and DNS
 
-`EC2_EDGE_NAMES` selects the blueprint resources; its default is `ok`.
+`EC2_EDGE_NAMES` selects the blueprint resources. The sample value is `ok`; with Pangolin, an empty value stops the render.
 The DNS record set adds `pangolin` for the dashboard.
 The domain subtree has the form `<label>.<domain>`.
 Porkbun manages records in the parent domain's zone.
@@ -51,7 +51,8 @@ The gateway's five model paths use virtual keys.
 Other gateway paths require the Pangolin login.
 The agent's two refused paths remain refused.
 
-Not verified: key-only API access for `agent` and `ov` through Pangolin. Their full edge rules need a separate review before use.
+The blueprint gives `agent` and `ov` no key-only API access: both resources ask for the Pangolin login on each path.
+Not verified: this login rule on a running Pangolin. The full edge rules of the two names need a separate review before use.
 
 The provider reads `EC2_PORKBUN_API_KEY` and `EC2_PORKBUN_SECRET_KEY` from the environment file, not the shell.
 These values go into each request body through a mode 0600 temporary file, not an address or command argument.

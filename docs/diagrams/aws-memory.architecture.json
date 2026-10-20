@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Shared memory from your terminal",
+    "output": "aws-memory.html",
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": {
+          "label": "AI memory"
+        },
+        "backend": {
+          "label": "Storage"
+        },
+        "security": {
+          "label": "Identity and keys"
+        },
+        "external": {
+          "label": "People and their computers"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "term_you",
+      "type": "external",
+      "label": "Your terminal",
+      "sublabel": "Pi or Claude Code",
+      "pos": [
+        60,
+        50
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "cfg_client",
+      "type": "external",
+      "label": "Client config",
+      "sublabel": "config.json, no key",
+      "pos": [
+        60,
+        210
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "key_profile",
+      "type": "security",
+      "label": "Your AWS profile",
+      "sublabel": "~/.aws/credentials",
+      "pos": [
+        60,
+        370
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "mem_stage",
+      "type": "frontend",
+      "label": "AgentCore Memory",
+      "sublabel": "records by namespace",
+      "pos": [
+        600,
+        50
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "s3_stage",
+      "type": "backend",
+      "label": "Stage bucket",
+      "sublabel": "users/ and projects/",
+      "pos": [
+        600,
+        210
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "iam_person",
+      "type": "security",
+      "label": "Your IAM user",
+      "sublabel": "one key, stage boundary",
+      "pos": [
+        600,
+        370
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "team_maintainer",
+      "type": "external",
+      "label": "Project maintainer",
+      "sublabel": "approves or rejects",
+      "pos": [
+        960,
+        50
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "admin_ops",
+      "type": "external",
+      "label": "Administrator",
+      "sublabel": "deploys the stage",
+      "pos": [
+        60,
+        600
+      ],
+      "size": [
+        150,
+        84
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Your computer",
+      "wraps": [
+        "term_you",
+        "cfg_client",
+        "key_profile"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "AWS Cloud",
+      "wraps": [
+        "mem_stage",
+        "s3_stage",
+        "iam_person"
+      ],
+      "pad": 44
+    },
+    {
+      "kind": "region",
+      "label": "Memory stack: one stage",
+      "wraps": [
+        "mem_stage",
+        "s3_stage",
+        "iam_person"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "from": "term_you",
+      "to": "mem_stage",
+      "label": "recall, propose",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "term_you",
+      "to": "s3_stage",
+      "label": "aws s3 cp",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "key_profile",
+      "to": "iam_person",
+      "label": "signs each call",
+      "variant": "security"
+    },
+    {
+      "from": "team_maintainer",
+      "to": "mem_stage",
+      "label": "approve or reject",
+      "variant": "emphasis"
+    },
+    {
+      "from": "admin_ops",
+      "to": "key_profile",
+      "label": "key and config by Bitwarden Send",
+      "variant": "security"
+    },
+    {
+      "from": "admin_ops",
+      "to": "iam_person",
+      "label": "creates your user",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Once: get access",
+      "items": [
+        "The administrator adds you to the stage file and deploys the stage",
+        "You get one key and one client config through a Bitwarden Send",
+        "Store the key in ~/.aws/credentials under the profile name of the config",
+        "Save the config as ~/.config/agentcore-memory/config.json; it holds no key",
+        "Set AGENTCORE_PROJECT to your project: the config names no Git remote or folder"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Each day: what you type",
+      "items": [
+        "Start Pi with the AgentCore extension, or claude --plugin-dir packages/agentcore-claude",
+        "Type a prompt: the client first recalls /shared/, /actor/<you>/ and /project/<p>/shared/",
+        "Ask the agent to remember a fact: it proposes it and writes only after you say yes",
+        "Copy a file: aws s3 cp <file> s3://<bucket>/users/<you>/ --profile <profile>",
+        "Stop every memory call: AGENTCORE_MEMORY_DISABLE=1"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Maintainers review",
+      "items": [
+        "agentcore-memory proposals list --project <p> --actor <a>",
+        "agentcore-memory proposals approve --project <p> --actor <a> --id <record>",
+        "An approved fact moves to /project/<p>/shared/, and each member then recalls it",
+        "A rejected fact moves to /project/<p>/rejected/<a>/"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "What the rules refuse",
+      "items": [
+        "The records and the files of another person",
+        "A project of which you are no member",
+        "Your own write into project shared: a maintainer approves it",
+        "A delete of a memory record, and a delete in a project folder"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What costs money",
+      "items": [
+        "AgentCore Memory meters stored records and retrieval requests; each recall sends retrievals",
+        "The stage bucket: the stored files and the requests",
+        "Your IAM user and its key cost nothing",
+        "Not verified: the rates; read the AgentCore pricing page"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Proven and not verified",
+      "items": [
+        "Proven on the dev stage: the deploy, one key for each user and 49 live access cases",
+        "Not verified: the tenant-pi client against a stage of this design",
+        "Not verified: the Bitwarden Send hand-over, offboarding and key rotation"
+      ]
+    }
+  ]
+}

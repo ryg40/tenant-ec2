@@ -170,7 +170,8 @@ Claude Code 2.1.295 expands this project skill in a scratch clone with a fresh h
 A synthetic personal skill wins the same-name test. The test sends no request to a model provider.
 Pi 1.1.0 loads the project skill without frontmatter warnings and expands the short prompt through its installed loader functions.
 A synthetic user skill wins Pi's native skill-name collision. The short prompt still names the kit source directly.
-The setup test proves relative links, repeat runs, and preservation of a conflicting project command.
+The setup test runs the setup twice in a clean clone and checks that both skill links reach the kit skill.
+Not verified: the refusal that keeps a conflicting project command.
 The `loaders skills/security-review/` line of `scripts/check.sh` runs these checks.
 It skips without Claude Code, Node.js or the Pi package.
 `CHECK_PI_PACKAGE` selects a package directory; a wrong directory fails the check.

@@ -24,6 +24,11 @@ import urllib.request
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
+# One bootstrap at a time: first boot, a replay or the launchd resume.
+LOCK = '/var/run/tenant-ec2-macos.lock'
+# The exit code of a first phase that stops before the account lockdown. The first-boot
+# stage reads it: the stage is not complete, and the default accounts are unchanged.
+LOCKDOWN_PENDING = 3
 
 
 def load_module(name, path):
@@ -580,7 +585,10 @@ class Bootstrap:
             need(not self.env.get('EC2_KIT_TOKEN_' + key), 'private-kit-clone-not-supported')
             if not source.exists():
                 self.user(['/usr/bin/git', '-c', 'credential.helper=', 'clone', '--depth', '1', '--branch', pin['source_tag'], '--', url, str(source)], timeout=300)
-            need(self.user(['/usr/bin/git', '-C', str(source), 'rev-parse', 'HEAD']).stdout.decode().strip() == pin['source_commit'], 'kit-pin')
+            # A clone that a stop interrupted has no readable HEAD. A replay names it; it does not delete it.
+            head = self.user(['/usr/bin/git', '-C', str(source), 'rev-parse', 'HEAD'], allow_failure=True)
+            need(head.returncode == 0, 'kit-source-incomplete')
+            need(head.stdout.decode().strip() == pin['source_commit'], 'kit-pin')
             need(not self.user(['/usr/bin/git', '-C', str(source), 'status', '--porcelain', '--untracked-files=all']).stdout.strip(), 'kit-dirty')
             podman = '/opt/podman/bin/podman'
             dockerfile = 'Dockerfile' if name == 'litellm' else 'deploy/Dockerfile'
@@ -677,18 +685,44 @@ class Bootstrap:
             os.chmod(path, mode, follow_symlinks=False)
         print('macos bootstrap: root-owned snapshot read and traverse pass')
 
-    def apply(self):
+    def lockdown_request(self, approved):
+        # An approval needs the pending marker of an earlier first phase. The lockdown runs once.
+        if approved:
+            need(self.record.get('lockdown') != 'done', 'lockdown-already-done')
+            need(self.record.get('lockdown') == 'pending', 'lockdown-not-pending')
+
+    def lockdown_gate(self, approved):
+        """Return True when the run continues after the account steps."""
+        if self.record.get('lockdown') == 'done':
+            print('macos bootstrap: default-account restrictions recorded; not repeated')
+            return True
+        if not approved:
+            # A directory readback is no login proof. The operator proves the PIN login first.
+            self.record['lockdown'] = 'pending'
+            self.save()
+            print('macos bootstrap: lockdown pending; default accounts unchanged')
+            return False
+        self.account_lockdown()
+        self.record['lockdown'] = 'done'
+        self.save()
+        return True
+
+    def apply(self, lockdown=False):
+        """Return False when the first phase stops before the lockdown."""
         self.identity()
+        self.lockdown_request(lockdown)
         self.snapshot_access()
         self.disk()
         self.account_setup()
-        self.account_lockdown()
+        if not self.lockdown_gate(lockdown):
+            return False
         self.tools()
         self.machine_start()
         self.stage_runtime()
         self.build_kits()
         self.services()
         self.launchd()
+        return True
 
     def resume(self):
         self.identity()
@@ -743,30 +777,44 @@ def main():
     parser.add_argument('--check-forms', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--resume', action='store_true')
+    # The operator approves the lockdown after the PIN login and the recovery path pass.
+    parser.add_argument('--lockdown', action='store_true')
     args = parser.parse_args()
     try:
         import resource
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         os.umask(0o077)
+        need(not (args.lockdown and args.resume), 'lockdown-with-resume')
         python_dependency(args)
         machine, env = inputs(args)
         if args.check_forms:
             print('macos bootstrap: forms pass')
             return 0
         if args.dry_run:
-            for step in ('verify durable disk identity', 'store first password and create the PIN account',
-                         'verify account then restrict default logins', 'install pinned tools', 'verify isolated applehv mounts',
-                         'refresh scoped credentials', 'build locked kits', 'start four selected services; agentcore-pending disabled'):
+            steps = ['verify durable disk identity', 'store first password and create the PIN account', 'verify account']
+            if args.lockdown:
+                steps += ['refuse without lockdown pending or after the lockdown', 'restrict default logins once']
+            else:
+                steps += ['stop with lockdown pending unless the lockdown is recorded; default accounts unchanged']
+            steps += ['install pinned tools', 'verify isolated applehv mounts', 'refresh scoped credentials',
+                      'build locked kits', 'start four selected services; agentcore-pending disabled']
+            for step in steps:
                 print('plan: ' + step)
             return 0
         need(args.root == Path('/') and sys.platform == 'darwin' and os.geteuid() == 0, 'native-root-required')
-        lock = os.open('/var/run/tenant-ec2-macos.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        lock = os.open(LOCK, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise Invalid('bootstrap-busy') from None
             info = os.fstat(lock)
             need(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o600, 'bootstrap-lock')
             bootstrap = Bootstrap(machine, env)
-            bootstrap.resume() if args.resume else bootstrap.apply()
+            if args.resume:
+                bootstrap.resume()
+            elif not bootstrap.apply(lockdown=args.lockdown):
+                return LOCKDOWN_PENDING
         finally:
             os.close(lock)
         return 0

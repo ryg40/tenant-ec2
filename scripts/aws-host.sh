@@ -79,6 +79,21 @@
 #       Mac only. --apply assumes the scoped session role for 900 seconds, then starts
 #       the PIN shell, localhost port 4180 forwarding, or SSH transport on port 22.
 #       The SSH transport still needs the owner public-key authentication.
+#   host-bootstrap [--lockdown]
+#       Mac only. --apply replays the first-boot stage of the user data after `secret`.
+#       It runs the scope checks of `session`, needs the running instance online in SSM,
+#       and refuses an empty or invalid <project>/macos/env (values withheld). It sends
+#       scripts/macos-first-boot-replay.sh with AWS-RunShellScript to the one stack
+#       instance, waits a bounded time and prints static status lines only.
+#       Without --lockdown, the stage stops after the PIN account readback with
+#       "lockdown pending"; the default accounts stay unchanged. --lockdown approves the
+#       account lockdown and runs the rest of the bootstrap. The host refuses it without
+#       the pending marker, and refuses a second lockdown.
+#       Not verified: a real replay on a Mac host; the tests use a stub of the AWS CLI.
+#   recovery-check
+#       Mac only. Print the operator check before host-bootstrap --lockdown: the Run As
+#       session and an SSH login of the PIN account with the owner key through SSM. It
+#       makes no AWS call and writes nothing.
 #   --apply            permit a Mac write; homelab retains its existing behavior
 #   --dry-run          print each command and make no AWS, DNS provider or SSM call
 #   --env-file <path>  the environment file; the default is .env of this repository
@@ -361,10 +376,12 @@ def options(found):
 def load(path, names, flags):
     found = parse(read_file(path), path)
     if variant(found) == "macos":
-        macos_dispatch(flags[0], flags[1], found, *(v == "1" for v in flags[2:7]))
+        macos_dispatch(flags[0], flags[1], found, *(v == "1" for v in flags[2:7]),
+                       lockdown=flags[7] == "1", env_file=path)
         print("macos_done=1")
         return
-    if flags[1] in ("host-allocate", "host-release", "stop", "start", "session", "tunnel", "ssh") or flags[3] == "1":
+    if flags[1] in ("host-allocate", "host-release", "stop", "start", "session", "tunnel", "ssh",
+                    "host-bootstrap", "recovery-check") or flags[3] == "1":
         stop("this command or --apply needs EC2_VARIANT=macos")
     for name in names.split():
         if name in found:
@@ -597,6 +614,27 @@ os.execvp("sudo", ["sudo", "-u", name, "-H", "python3", "-I", repo + "/scripts/v
             "python3 -I -c " + shlex.quote(program) + " " + shlex.quote(project) + " " + shlex.quote(account)]
 
 
+# The first-boot replay: the SSM time limit, and the only remote lines that the wrapper prints.
+REPLAY_SECONDS = 10800
+REPLAY_STATUS = re.compile(r"macos (?:first boot|bootstrap|user data): [A-Za-z0-9 ;,\x27-]{1,120}")
+# The line of the first-boot stage after a first phase that stopped before the account lockdown.
+REPLAY_PENDING = "macos first boot: lockdown pending; run recovery-check, then host-bootstrap --apply --lockdown"
+
+
+def macos_replay_commands(repo, project, phase="first-boot"):
+    """The fixed payload: one tracked file after the validated project and phase assignments."""
+    with open(os.path.join(repo, "scripts/macos-first-boot-replay.sh"), encoding="ascii") as handle:
+        text = handle.read(16385)
+    lines = text.splitlines()
+    if len(text) > 16384 or not lines or lines[0] != "#!/bin/sh":
+        stop("scripts/macos-first-boot-replay.sh is not the reviewed payload form")
+    if not re.fullmatch(r"[a-z][a-z0-9-]{2,30}", project):
+        stop("EC2_PROJECT: invalid form")
+    if phase not in ("first-boot", "lockdown"):
+        stop("host-bootstrap: invalid phase")
+    return ["MACOS_PROJECT=" + project, "MACOS_PHASE=" + phase] + lines
+
+
 def macos_podman(found):
     """Match the machine schema bounds without an engine or provider call."""
     provider = found.get("EC2_MACOS_PODMAN_PROVIDER") or os.environ.get("EC2_MACOS_PODMAN_PROVIDER") or "applehv"
@@ -614,7 +652,8 @@ def macos_podman(found):
     return sizes
 
 
-def macos(repo, command, found, dry, apply=False, replace=False, remove=False, write=False, allow=""):
+def macos(repo, command, found, dry, apply=False, replace=False, remove=False, write=False, allow="",
+          lockdown=False, env_file=""):
     """Keep Mac state, private responses and lifecycle guards separate from homelab."""
     import datetime as dt
     import importlib.util
@@ -709,10 +748,11 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
         if name in excluded or name.startswith(("EC2_OPENVIKING_", "EC2_PANGOLIN_", "EC2_COPILOT_", "EC2_NEWT_")):
             need(not value, name + " is unsupported for macos")
     need(command != "dns", "dns is unavailable for macos, including plan and dry-run")
+    writes = ("host-allocate", "host-release", "stop", "start", "deploy", "secret", "session", "tunnel", "ssh",
+              "host-bootstrap")
     if apply:
-        need(command in ("host-allocate", "host-release", "stop", "start", "deploy", "secret", "session", "tunnel", "ssh"),
-             "--apply is not supported for this command")
-    if command in ("host-allocate", "host-release", "stop", "start", "deploy", "secret", "session", "tunnel", "ssh") and not apply:
+        need(command in writes, "--apply is not supported for this command")
+    if command in writes and not apply:
         dry = True
     if dry:
         print("dry run: macos " + command + "; no AWS call, provider call, temporary file or mutation")
@@ -726,6 +766,8 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
             "secret": "validate selected services; write <project>/macos/env; no DNS, OpenViking, personal IAM or SSH private key",
             "generated-status": "read <project>/macos/generated with --variant macos; print names only",
             "verify": "ssm send-command --document-name AWS-RunShellScript; validate /etc/<project>/machine.json; cd /opt/<project>/macos/snapshot; sudo -u <machine.account.name> -H python3 -I /opt/<project>/macos/snapshot/scripts/verify-deployed.py --repo /opt/<project>/macos/snapshot --project <project> --variant macos --engine podman --file-set compose.macos.yaml --edge-names <empty>",
+            "host-bootstrap": "check stage, boundary, allocation, host and the running runtime instance; ssm describe-instance-information; secretsmanager get-secret-value --secret-id <project>/macos/env and refuse an empty or invalid secret, values withheld; ssm send-command --document-name AWS-RunShellScript --instance-ids <InstanceId> with MACOS_PROJECT=<project>, MACOS_PHASE=<phase> and scripts/macos-first-boot-replay.sh; executionTimeout " + str(REPLAY_SECONDS) + " seconds; poll get-command-invocation; print static status lines only",
+            "recovery-check": "read the local stage file and private state; print the Run As session check and the owner-key SSH login through SSM; no AWS call; nothing written",
         }
         for kind, document in (("session", "<SessionDocumentName>"), ("tunnel", "AWS-StartPortForwardingSession"),
                                ("ssh", "AWS-StartSSHSession")):
@@ -733,6 +775,14 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
         print("dry run: " + plans[command])
         if command == "secret":
             secret_values(sample_values, found, allow, root, dry=True)
+        if command == "host-bootstrap":
+            phase = "lockdown" if lockdown else "first-boot"
+            payload = macos_replay_commands(repo, "tenant-ec2", phase)
+            print("dry run: payload of " + str(len(payload) - 2) + " lines from scripts/macos-first-boot-replay.sh; no secret value in it")
+            if lockdown:
+                print("dry run: phase lockdown; the host refuses without lockdown pending and refuses a second lockdown; then the rest of the bootstrap")
+            else:
+                print("dry run: phase first-boot; the stage stops with lockdown pending after the PIN account readback; default accounts unchanged")
         return
 
     project = matches(setting("EC2_PROJECT", "tenant-ec2"), r"[a-z][a-z0-9-]{2,30}", "EC2_PROJECT")
@@ -751,9 +801,9 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
     if state:
         need(all(state.get(k) == v for k, v in identity.items()), "private deployment state identity mismatch")
 
-    def cost():
-        print("Cost/state: allocated and stopped hosts keep charging outside pending scrub; the minimum is 24 billable hours.", flush=True)
-        print("Cost/state: pending scrub pauses host billing; release ends future host charges, not retained storage charges.", flush=True)
+    def cost(stream=None):
+        print("Cost/state: allocated and stopped hosts keep charging outside pending scrub; the minimum is 24 billable hours.", file=stream, flush=True)
+        print("Cost/state: pending scrub pauses host billing; release ends future host charges, not retained storage charges.", file=stream, flush=True)
 
     def aws(service, operation, *args, absent=False, failed_wait=False):
         result = subprocess.run(["aws", "--profile", profile, "--region", region, "--no-cli-pager",
@@ -969,7 +1019,8 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
         else:
             document = "AWS-StartSSHSession"
             parameters = dict(portNumber=["22"])
-        cost()
+        # An SSH client can use `ssh --apply` as its ProxyCommand: stdout carries the SSH stream only.
+        cost(sys.stderr if command == "ssh" else None)
         response = aws("sts", "assume-role", "--role-arn", arn, "--role-session-name", "macos-operator", "--duration-seconds", "900")
         credentials = response["Credentials"]
         need(all(isinstance(credentials.get(k), str) and credentials[k] for k in
@@ -987,6 +1038,113 @@ def macos(repo, command, found, dry, apply=False, replace=False, remove=False, w
             args += ["--parameters", json.dumps(parameters)]
         result = subprocess.run(args, env=environment, stdout=sys.stdout, stderr=subprocess.DEVNULL)
         need(result.returncode == 0, "Mac session failed; provider error withheld")
+        return
+
+    if command == "recovery-check":
+        # Print the operator check of the lockdown gate. It uses the scoped session commands of
+        # this script. Local reads only: no AWS call, no file write, no secret value.
+        selected()
+        need(state.get("hostId") and state.get("instanceId"),
+             "recovery-check requires private runtime state; run outputs --write first")
+        account = matches(state.get("localAccount", ""), r"xyz[0-9]{4}", "localAccount")
+        wrapper = "sh " + shlex.quote(str(root / "scripts/aws-host.sh")) + " --env-file " + shlex.quote(env_file)
+        public_key = Path(setting("EC2_SSH_PUBLIC_KEY_FILE")).expanduser().absolute()
+        private_key = Path(str(public_key)[:-4]) if str(public_key).endswith(".pub") else None
+        identity = shlex.quote(str(private_key)) if private_key and private_key.is_file() else "<the private key of EC2_SSH_PUBLIC_KEY_FILE>"
+        known = shlex.quote(str(root / ".local" / "macos" / (stack + ".known_hosts")))
+        ssh = ("ssh -F none -i " + identity + " -o IdentitiesOnly=yes -o PreferredAuthentications=publickey"
+               " -o HostKeyAlias=" + stack + " -o UserKnownHostsFile=" + known + " -o StrictHostKeyChecking=accept-new"
+               " -o " + shlex.quote("ProxyCommand=" + wrapper + " ssh --apply") + " " + account + "@" + stack + " id -un")
+        for line in (
+                "macos recovery-check: no AWS call and no file write; run each step yourself before the lockdown",
+                "macos recovery-check: the first phase ran through Run Command; that is the administrative recovery path",
+                "step 1, the Run As check: " + wrapper + " session --apply",
+                "  in the session, run: id -un; print -r -- $ZSH_NAME; then exit",
+                "  pass: the two lines are " + account + " and zsh; any other user or an ended session is a failure",
+                "step 2, the SSH login of " + account + " with the owner key through SSM:",
+                "  " + ssh,
+                "  pass: the output is " + account + "; a password prompt or another line is a failure",
+                "  the client stores the host key in " + known + "; it is no secret",
+                "step 3, only after both steps pass: " + wrapper + " host-bootstrap --apply --lockdown",
+                "on a failure: do not run --lockdown; follow docs/variants.md#recovery-before-the-lockdown"):
+            print(line)
+        return
+
+    if command == "host-bootstrap":
+        import time
+        stage, role, saved = selected()
+        scope_check(stage, role, saved)
+        need(state.get("hostId"), "host-bootstrap requires private allocation state")
+        location()
+        allocation_item = allocation_stack()
+        row = host(state["hostId"], allocation_item["StackId"])
+        item = runtime()
+        out = outputs(item)
+        instances = attachments(row, out["InstanceId"])
+        need(len(instances) == 1 and instances[0]["State"]["Name"] == "running", "host-bootstrap needs the running runtime instance")
+        account = matches(out.get("DeveloperAccount", ""), r"xyz[0-9]{4}", "DeveloperAccount")
+        need(account == state.get("localAccount"), "developer account output mismatch")
+        managed = aws("ssm", "describe-instance-information", "--filters", "Key=InstanceIds,Values=" + out["InstanceId"])
+        rows = managed.get("InstanceInformationList", [])
+        need(len(rows) == 1 and rows[0].get("InstanceId") == out["InstanceId"] and rows[0].get("PingStatus") == "Online",
+             "the runtime instance is not online in Systems Manager; wait, then repeat host-bootstrap")
+        # Refuse before the replay with the same service forms as the bootstrap. Values stay in memory.
+        spec = importlib.util.spec_from_file_location("macos_forms", root / "config/macos/bootstrap-forms.py")
+        forms = importlib.util.module_from_spec(spec)
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(forms)
+        reply = aws("secretsmanager", "get-secret-value", "--secret-id", project + "/macos/env")
+        try:
+            body = forms.service_settings(reply.get("SecretString") or "")
+            need(body, "environment secret is empty; write it with secret --apply, then repeat host-bootstrap")
+            services = json.loads((root / "config/macos/machine.json").read_text())["services"]
+            forms.service_forms(body, dict(services=services, project=project, region=region))
+        except ValueError as error:
+            code = str(error) if isinstance(error, forms.Invalid) else "service-syntax"
+            stop("environment secret refused: " + code + "; values withheld; write it with secret --apply")
+        del reply, body
+        commands = macos_replay_commands(repo, project, "lockdown" if lockdown else "first-boot")
+        cost()
+        sent = aws("ssm", "send-command", "--instance-ids", out["InstanceId"], "--document-name", "AWS-RunShellScript",
+                   "--comment", project + (" macos lockdown" if lockdown else " macos first-boot replay"),
+                   "--parameters", json.dumps({"commands": commands, "executionTimeout": [str(REPLAY_SECONDS)]}))
+        command_id = matches(sent["Command"]["CommandId"], r"[a-f0-9-]{36}", "command identity")
+        print("macos host-bootstrap: replay sent; the wait ends after at most " + str(REPLAY_SECONDS // 60 + 10) + " minutes", flush=True)
+        deadline, polls, unread = time.monotonic() + REPLAY_SECONDS + 600, 0, 0
+        while True:
+            invocation = aws("ssm", "get-command-invocation", "--command-id", command_id, "--instance-id", out["InstanceId"],
+                             failed_wait=True)
+            polls += 1
+            unread = unread + 1 if invocation is None else 0
+            need(unread <= 30, "replay status unreadable; inspect the command before a new replay")
+            if invocation is not None and invocation.get("Status") not in ("Pending", "InProgress", "Delayed", "Cancelling"):
+                break
+            need(time.monotonic() < deadline, "replay wait ended; the command can still run; inspect it before a new replay")
+            time.sleep(2 if polls < 4 else 20)
+        shown = withheld = 0
+        for key in ("StandardOutputContent", "StandardErrorContent"):
+            text = invocation.get(key)
+            for line in (text if isinstance(text, str) else "").splitlines():
+                if shown < 60 and REPLAY_STATUS.fullmatch(line):
+                    print(line)
+                    shown += 1
+                elif line.strip():
+                    withheld += 1
+        if withheld:
+            print("macos host-bootstrap: " + str(withheld) + " other remote lines withheld")
+        status = invocation.get("Status")
+        status = status if isinstance(status, str) and re.fullmatch(r"[A-Za-z]{1,32}", status) else "unknown"
+        need(status == "Success", "replay ended with status " + status + "; read the status lines above and the stop table of docs/variants.md")
+        text = invocation.get("StandardOutputContent")
+        if REPLAY_PENDING in (text if isinstance(text, str) else "").splitlines():
+            need(not lockdown, "the lockdown phase reported lockdown pending; inspect the host before a new replay")
+            print("macos host-bootstrap: first phase complete; lockdown pending; the default accounts are unchanged")
+            print("macos host-bootstrap: next: recovery-check, then host-bootstrap --apply --lockdown")
+            return
+        if lockdown:
+            print("macos host-bootstrap: pass; lockdown applied; the first-boot stage is complete")
+        else:
+            print("macos host-bootstrap: pass; the first-boot stage is complete")
         return
 
     if command == "verify":
@@ -1686,6 +1844,7 @@ replace=0
 allow_remove=0
 write=0
 plan=0
+lockdown=0
 allow_empty=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -1702,6 +1861,7 @@ while [ $# -gt 0 ]; do
         --allow-remove) allow_remove=1 ;;
         --write) write=1 ;;
         --plan) plan=1 ;;
+        --lockdown) lockdown=1 ;;
         --allow-empty | --allow-empty=*)
             case $1 in
                 --allow-empty)
@@ -1726,7 +1886,7 @@ while [ $# -gt 0 ]; do
 done
 
 case $command in
-    deploy | outputs | secret | generated-status | dns | verify | host-allocate | host-release | stop | start | session | tunnel | ssh) ;;
+    deploy | outputs | secret | generated-status | dns | verify | host-allocate | host-release | stop | start | session | tunnel | ssh | host-bootstrap | recovery-check) ;;
     *) usage >&2; exit 2 ;;
 esac
 [ "$apply$dry" != 11 ] || die "--apply and --dry-run conflict"
@@ -1734,6 +1894,7 @@ esac
 [ "$allow_remove" = 0 ] || [ "$command" = deploy ] || die "--allow-remove is an option of deploy"
 [ "$write" = 0 ] || [ "$command" = outputs ] || die "--write is an option of outputs"
 [ "$plan" = 0 ] || [ "$command" = dns ] || die "--plan is an option of dns"
+[ "$lockdown" = 0 ] || [ "$command" = host-bootstrap ] || die "--lockdown is an option of host-bootstrap"
 [ -z "$allow_empty" ] || [ "$command" = secret ] || die "--allow-empty is an option of secret"
 command -v python3 >/dev/null || die "python3 not found"
 [ "$dry" = 1 ] || command -v aws >/dev/null || die "the AWS CLI not found"
@@ -1768,7 +1929,7 @@ else
     env_dir=$(CDPATH='' cd -- "$(dirname -- "$env_file")" && pwd) ||
         die "cannot find the directory of the environment file $env_file"
     env_file=${env_dir%/}/$(basename -- "$env_file")
-    assign=$(helper load "$env_file" "$setting_names" "$top" "$command" "$dry" "$apply" "$replace" "$allow_remove" "$write") || exit 1
+    assign=$(helper load "$env_file" "$setting_names" "$top" "$command" "$dry" "$apply" "$replace" "$allow_remove" "$write" "$lockdown") || exit 1
 fi
 # Mac output is a static status, never shell input. Keep its private data in Python.
 case $assign in

@@ -332,7 +332,7 @@ Resources:
         Value: alice
       - Key: pin
         Value: XYZ1000
-      - Key: stage
+      - Key: Stage
         Value:
           Ref: Stage
       UserName:
@@ -424,7 +424,7 @@ Resources:
         Value: bruno
       - Key: pin
         Value: XYZ1001
-      - Key: stage
+      - Key: Stage
         Value:
           Ref: Stage
       UserName:
@@ -503,7 +503,7 @@ Resources:
         Value: chen
       - Key: pin
         Value: XYZ1002
-      - Key: stage
+      - Key: Stage
         Value:
           Ref: Stage
       UserName:
@@ -577,7 +577,7 @@ Resources:
         Value: dana
       - Key: pin
         Value: XYZ1003
-      - Key: stage
+      - Key: Stage
         Value:
           Ref: Stage
       UserName:

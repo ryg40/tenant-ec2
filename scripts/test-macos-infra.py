@@ -158,6 +158,10 @@ def decision(statements, action, resource, context=None):
     return allowed
 
 
+def stat_mode(path):
+    return path.stat().st_mode & 0o7777
+
+
 class MacosInfraTests(unittest.TestCase):
     def setUp(self):
         self.allocation = load("aws-macos-allocation.cfn.yaml")
@@ -340,10 +344,8 @@ class MacosInfraTests(unittest.TestCase):
             for excluded in ("MemoryArn", "MemoryBucket", "pi-durable", "EC2_SNAPSHOT_CLONE_TOKEN"):
                 self.assertNotIn(excluded, json.dumps(machine))
 
-    def test_userdata_bootstrap_private_input_lifetime(self):
-        script = resolve(self.runtime["Resources"]["Instance"]["Properties"]["UserData"]["Fn::Base64"])
-        stub = '''#!/usr/bin/python3
-import json, os, pathlib, subprocess, sys
+    STUB = """#!/usr/bin/python3
+import json, os, pathlib, shutil, subprocess, sys
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == 'install':
@@ -355,55 +357,270 @@ elif name == 'plutil' and args[0] == '-lint':
 elif name == 'aws':
     assert args[:4] == ['--region', 'us-east-1', 'secretsmanager', 'get-secret-value']
     print('{}' if os.environ.get('EMPTY_ENV') else json.dumps({'EC2_SNAPSHOT_CLONE_TOKEN': 'private-fixture-do-not-print'}))
+elif name == 'git' and args[:3] == ['-c', 'credential.helper=', 'clone']:
+    assert args[3:7] == ['--depth', '1', '--branch', 'portable-v1.0.0'] and os.environ['GIT_TERMINAL_PROMPT'] == '0'
+    target = pathlib.Path(args[-1])
+    assert target.name.startswith('snapshot.partial.') and target.is_dir() and not any(target.iterdir())
+    (target / '.git').mkdir()
+    (target / 'scripts').mkdir()
+    (target / 'half-written').write_text('')
+    if os.environ.get('CLONE_FAIL'):
+        sys.exit(128)
+    shutil.copy(os.environ['BOOT_SOURCE'], target / 'scripts/host-bootstrap-macos.sh')
+    (target / 'half-written').unlink()
 elif name == 'git' and args[2:] == ['rev-parse', 'HEAD']:
     print('b' * 40 if os.environ.get('BAD_COMMIT') else 'a' * 40)
 elif name == 'git' and args[2:] == ['status', '--porcelain', '--untracked-files=all']:
     pass
 else:
     raise SystemExit('unexpected fixture command')
-'''
-        for bootstrap_exit, extra in ((0, {}), (7, {}), (0, {"EMPTY_ENV": "1"}), (0, {"BAD_COMMIT": "1"})):
-            with self.subTest(bootstrap_exit=bootstrap_exit, extra=extra), tempfile.TemporaryDirectory(prefix="macos-userdata-test-") as directory:
-                root = Path(directory)
-                bin_dir = root / "bin"
-                bin_dir.mkdir()
-                for name in ("install", "plutil", "aws", "git"):
-                    path = bin_dir / name
-                    path.write_text(stub)
-                    path.chmod(0o755)
-                repo = root / "opt/fixture-kit/macos/snapshot"
-                (repo / "scripts").mkdir(parents=True)
-                (repo / ".git").mkdir()
-                (repo / "scripts/host-bootstrap-macos.sh").write_text('''#!/bin/zsh
+"""
+    BOOT = """#!/bin/zsh
 set -eu
-[[ "$1" = --machine && "$3" = --env-file && $# = 4 ]]
-python3 - "$2" "$4" <<'PY'
+[[ "$1" = --machine && "$3" = --env-file ]]
+[[ $# = 4 || ( $# = 5 && "$5" = --lockdown ) ]]
+python3 - "$2" "$4" "${5:-first-phase}" <<'PY'
 import json, os, pathlib, stat, sys
-machine, env = map(pathlib.Path, sys.argv[1:])
+machine, env = map(pathlib.Path, sys.argv[1:3])
 assert stat.S_IMODE(machine.stat().st_mode) == 0o644
 assert stat.S_IMODE(machine.parent.stat().st_mode) == 0o755
 assert stat.S_IMODE(env.stat().st_mode) == 0o600
 assert stat.S_IMODE(env.parent.stat().st_mode) == 0o700
 assert json.loads(machine.read_text())['account']['name'] == 'xyz1000'
 assert json.loads(env.read_text())['EC2_SNAPSHOT_CLONE_TOKEN'] == 'private-fixture-do-not-print'
-pathlib.Path(os.environ['BOOT_CALLED']).write_text(str(env))
+with open(os.environ['BOOT_CALLED'], 'a') as stream:
+    stream.write(str(env) + ' ' + sys.argv[3] + '\\n')
 PY
 exit "$BOOT_EXIT"
-''')
-                run_script = script.replace('/etc/fixture-kit', str(root / 'etc/fixture-kit')).replace(
-                    '/opt/fixture-kit', str(root / 'opt/fixture-kit')).replace(
-                    'export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin',
-                    f'export PATH={bin_dir}:/usr/bin:/bin')
-                called = root / "bootstrap-called"
-                result = subprocess.run(["zsh"], input=run_script, text=True, capture_output=True, timeout=20,
-                                        env=dict(os.environ, BOOT_CALLED=str(called), BOOT_EXIT=str(bootstrap_exit), **extra))
+"""
+
+    def first_boot(self, root, snapshot=True):
+        """Rendered user data and the tracked replay payload, pointed at a fixture root."""
+        script = resolve(self.runtime["Resources"]["Instance"]["Properties"]["UserData"]["Fn::Base64"])
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        for name in ("install", "plutil", "aws", "git"):
+            path = bin_dir / name
+            path.write_text(self.STUB)
+            path.chmod(0o755)
+        (root / "boot-source").write_text(self.BOOT)
+        if snapshot:
+            repo = root / "opt/fixture-kit/macos/snapshot"
+            (repo / "scripts").mkdir(parents=True)
+            (repo / ".git").mkdir()
+            (repo / "scripts/host-bootstrap-macos.sh").write_text(self.BOOT)
+        userdata = script.replace('/etc/fixture-kit', str(root / 'etc/fixture-kit')).replace(
+            '/opt/fixture-kit', str(root / 'opt/fixture-kit')).replace(
+            'export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin',
+            f'export PATH={bin_dir}:/usr/bin:/bin')
+        payload = (ROOT / "scripts/macos-first-boot-replay.sh").read_text()
+        self.assertEqual(payload.count('etc_dir=/etc/$MACOS_PROJECT'), 1)
+        self.assertEqual(payload.count('-user 0'), 2)
+        payload = payload.replace(
+            'etc_dir=/etc/$MACOS_PROJECT', f'etc_dir={root}/etc/$MACOS_PROJECT').replace('-user 0', f'-user {os.getuid()}')
+        called = root / "bootstrap-called"
+
+        def lines(phase):
+            # The two assignments of the wrapper; an empty phase leaves the second one out.
+            return "MACOS_PROJECT=fixture-kit\n" + ("MACOS_PHASE=" + phase + "\n" if phase else "") + payload
+
+        def run(text, shell, bootstrap_exit=0, **extra):
+            result = subprocess.run([shell], input=text, text=True, capture_output=True, timeout=20,
+                                    env=dict(os.environ, BOOT_CALLED=str(called), BOOT_EXIT=str(bootstrap_exit),
+                                             BOOT_SOURCE=str(root / "boot-source"), **extra))
+            self.assertNotIn("private-fixture-do-not-print", result.stdout + result.stderr)
+            self.assertFalse(list((root / "etc/fixture-kit/macos").glob("bootstrap.*")))
+            self.assertFalse(list((root / "etc/fixture-kit/macos").glob("userdata.*")))
+            self.assertFalse(list((root / "opt/fixture-kit/macos").glob("snapshot.partial.*")))
+            calls = called.read_text().splitlines() if called.exists() else []
+            for env in calls:
+                self.assertFalse(Path(env.split()[0]).exists())
+            return result, len(calls)
+        return (lambda bootstrap_exit=0, **extra: run(userdata, "zsh", bootstrap_exit, **extra),
+                lambda bootstrap_exit=0, phase="first-boot", **extra: run(lines(phase), "sh", bootstrap_exit, **extra))
+
+    def test_userdata_bootstrap_private_input_lifetime(self):
+        for bootstrap_exit, extra in ((0, {}), (7, {}), (0, {"EMPTY_ENV": "1"}), (0, {"BAD_COMMIT": "1"})):
+            with self.subTest(bootstrap_exit=bootstrap_exit, extra=extra), tempfile.TemporaryDirectory(prefix="macos-userdata-test-") as directory:
+                root = Path(directory)
+                userdata, _ = self.first_boot(root)
+                result, calls = userdata(bootstrap_exit, **extra)
                 self.assertEqual(result.returncode, 1 if extra else bootstrap_exit, result.stderr)
-                self.assertNotIn("private-fixture-do-not-print", result.stdout + result.stderr)
-                self.assertEqual(called.exists(), not extra)
-                self.assertFalse(list((root / "etc/fixture-kit/macos").glob("bootstrap.*")))
+                self.assertEqual(calls, 0 if extra else 1)
                 self.assertTrue((root / "etc/fixture-kit/machine.json").is_file())
-                if called.exists():
-                    self.assertFalse(Path(called.read_text()).exists())
+                self.assertEqual((root / "etc/fixture-kit/macos/first-boot.done").exists(), not extra and not bootstrap_exit)
+
+    def test_userdata_and_replay_run_one_stage(self):
+        script = resolve(self.runtime["Resources"]["Instance"]["Properties"]["UserData"]["Fn::Base64"])
+        head, rest = script.split("cat >\"$temp/first-boot.zsh\" <<'STAGE'\n", 1)
+        stage, tail = rest.split("\nSTAGE\n", 1)
+        self.assertTrue(stage.startswith("#!/bin/zsh\n[[ ! -o xtrace ]] || exit 1\n"))
+        result = subprocess.run(["zsh", "-n"], input=stage, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The secret read, the clone, the checks and the bootstrap call exist once, inside the stage.
+        for text in ("get-secret-value", "git -c credential.helper= clone", "rev-parse HEAD", "host-bootstrap-macos.sh"):
+            self.assertIn(text, stage)
+            self.assertNotIn(text, head + tail)
+        self.assertEqual(tail.strip().splitlines(), [
+            "/bin/zsh -n \"$temp/first-boot.zsh\" || die 'invalid first-boot stage'",
+            'install -o root -g wheel -m 0700 "$temp/first-boot.zsh" /etc/fixture-kit/macos/first-boot.zsh',
+            'rm -rf -- "$temp"', 'trap - EXIT', 'exec /bin/zsh /etc/fixture-kit/macos/first-boot.zsh'])
+        self.assertIn("unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID", head)
+        self.assertIn("unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID", stage)
+        order = [stage.index(text) for text in ("zsystem flock", "first-boot.done ]]", "get-secret-value",
+                                               "rev-parse HEAD", "host-bootstrap-macos.sh", ": >$stage/first-boot.done")]
+        self.assertEqual(order, sorted(order))
+        for text in (PARAMS["MemoryArn"], PARAMS["MemoryBucket"], "EC2_MACOS_DEVELOPER_PASSWORD", "xtrace\nset -x"):
+            self.assertNotIn(text, stage)
+        payload = (ROOT / "scripts/macos-first-boot-replay.sh").read_text()
+        self.assertTrue(payload.startswith("#!/bin/sh\n"))
+        self.assertIn('stage=$etc_dir/macos/first-boot.zsh', payload)
+        self.assertEqual(payload.strip().splitlines()[-1], 'exec /bin/zsh "$stage" "$@"')
+        # The wrapper prints its pending result only on the exact line of the stage.
+        wrapper = (ROOT / "scripts/aws-host.sh").read_text()
+        pending = re.search(r'^REPLAY_PENDING = "macos first boot: ([^"]+)"$', wrapper, re.M).group(1)
+        self.assertEqual(stage.count("say '" + pending + "'"), 1)
+        code = "\n".join(line for line in payload.split("set +x", 1)[1].splitlines() if not line.lstrip().startswith("#"))
+        for word in ("aws", "git", "secret", "EC2_[A-Z_]+", "curl", "rm", "eval"):
+            self.assertIsNone(re.search(r"\b" + word + r"\b", code), word)
+
+    def test_replay_after_empty_environment_matches_filled_first_boot(self):
+        with tempfile.TemporaryDirectory(prefix="macos-replay-test-") as directory:
+            root = Path(directory)
+            userdata, replay = self.first_boot(root, snapshot=False)
+            result, calls = userdata(EMPTY_ENV="1")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("macos first boot: environment pending; replay required after the secret write", result.stderr)
+            self.assertEqual(calls, 0)
+            stage = root / "etc/fixture-kit/macos/first-boot.zsh"
+            self.assertEqual(stat_mode(stage), 0o700)
+            self.assertFalse((root / "opt/fixture-kit/macos/snapshot").exists())
+            # A replay with the secret still empty stops at the same place and changes nothing.
+            result, calls = replay(EMPTY_ENV="1")
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertIn("environment pending", result.stderr)
+            result, calls = replay(CLONE_FAIL="1")
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertIn("macos first boot: snapshot clone failed", result.stderr)
+            result, calls = replay(BAD_COMMIT="1")
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertIn("macos first boot: snapshot commit differs", result.stderr)
+            self.assertFalse((root / "opt/fixture-kit/macos/snapshot").exists())
+            result, calls = replay(7)
+            self.assertEqual((result.returncode, calls), (7, 1))
+            self.assertFalse((root / "etc/fixture-kit/macos/first-boot.done").exists())
+            result, calls = replay()
+            self.assertEqual((result.returncode, calls), (0, 2), result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["macos first boot: start", "macos first boot: environment read",
+                                                          "macos first boot: snapshot verified", "macos first boot: complete"])
+            self.assertTrue((root / "opt/fixture-kit/macos/snapshot/scripts/host-bootstrap-macos.sh").is_file())
+            # The stage ran to completion once; a later replay is a no-op with a status line.
+            result, calls = replay()
+            self.assertEqual((result.returncode, calls, result.stdout), (0, 2, "macos first boot: already complete; no replay needed\n"))
+
+        with tempfile.TemporaryDirectory(prefix="macos-replay-test-") as directory:
+            # The same first boot with a filled secret gives the same end state in one run.
+            root = Path(directory)
+            userdata, _ = self.first_boot(root, snapshot=False)
+            result, calls = userdata()
+            self.assertEqual((result.returncode, calls), (0, 1), result.stderr)
+            self.assertTrue((root / "etc/fixture-kit/macos/first-boot.done").exists())
+
+    def test_first_phase_stops_before_lockdown_and_lockdown_runs_once(self):
+        wrapper = (ROOT / "scripts/aws-host.sh").read_text()
+        pending = re.search(r'^REPLAY_PENDING = "([^"]+)"$', wrapper, re.M).group(1)
+        with tempfile.TemporaryDirectory(prefix="macos-lockdown-test-") as directory:
+            root = Path(directory)
+            userdata, replay = self.first_boot(root, snapshot=False)
+            done = root / "etc/fixture-kit/macos/first-boot.done"
+            called = root / "bootstrap-called"
+            # Exit 3 of the bootstrap: the first phase stopped before the lockdown. The stage is not complete.
+            result, calls = userdata(3)
+            self.assertEqual((result.returncode, calls), (0, 1), result.stderr)
+            self.assertEqual(result.stdout.splitlines()[-1], pending)
+            self.assertFalse(done.exists())
+            result, calls = replay(3)
+            self.assertEqual((result.returncode, calls, result.stdout.splitlines()[-1]), (0, 2, pending))
+            self.assertFalse(done.exists())
+            # A failed lockdown phase keeps the stage open; the next lockdown phase completes it.
+            result, calls = replay(1, phase="lockdown")
+            self.assertEqual((result.returncode, calls), (1, 3))
+            self.assertFalse(done.exists())
+            result, calls = replay(0, phase="lockdown")
+            self.assertEqual((result.returncode, calls), (0, 4), result.stderr)
+            self.assertEqual(result.stdout.splitlines()[-1], "macos first boot: complete")
+            self.assertTrue(done.exists())
+            self.assertEqual([line.split()[1] for line in called.read_text().splitlines()],
+                             ["first-phase", "first-phase", "--lockdown", "--lockdown"])
+            # A second lockdown stops before the bootstrap; a plain replay is a no-op.
+            result, calls = replay(0, phase="lockdown")
+            self.assertEqual((result.returncode, calls, result.stdout), (1, 4, ""))
+            self.assertEqual(result.stderr, "macos first boot: lockdown refused; the first-boot stage is complete\n")
+            result, calls = replay(0)
+            self.assertEqual((result.returncode, calls, result.stdout), (0, 4, "macos first boot: already complete; no replay needed\n"))
+            # A missing or unknown phase stops in the payload; an unknown stage argument stops in the stage.
+            for phase in ("", "lockdown-now", "Lockdown"):
+                with self.subTest(phase=phase):
+                    result, calls = replay(0, phase=phase)
+                    self.assertEqual((result.returncode, calls, result.stderr), (1, 4, "macos first boot: phase refused\n"))
+            stage = root / "etc/fixture-kit/macos/first-boot.zsh"
+            for arguments in (["--other"], ["--lockdown", "--lockdown"]):
+                result = subprocess.run(["zsh", str(stage), *arguments], capture_output=True, text=True, timeout=10)
+                self.assertEqual((result.returncode, result.stderr), (1, "macos first boot: stage argument refused\n"))
+            self.assertEqual(len(called.read_text().splitlines()), 4)
+
+    def test_replay_payload_refuses_unsafe_or_busy_stage(self):
+        import fcntl
+        with tempfile.TemporaryDirectory(prefix="macos-replay-test-") as directory:
+            root = Path(directory)
+            userdata, replay = self.first_boot(root)
+            result, _ = replay()
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, "macos first boot: stage missing; the user data stopped before it\n")
+            userdata(EMPTY_ENV="1")
+            stage = root / "etc/fixture-kit/macos/first-boot.zsh"
+            lock = root / "etc/fixture-kit/macos/first-boot.lock"
+            with lock.open("a") as stream:
+                fcntl.lockf(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result, calls = replay()
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertEqual(result.stderr, "macos first boot: stage already running; wait for it to end\n")
+            for path, mode, message in ((stage, 0o755, "stage owner or mode refused"), (stage.parent, 0o770, "stage owner or mode refused"),
+                                        (stage.parent.parent, 0o775, "stage owner or mode refused")):
+                with self.subTest(path=path.name, mode=oct(mode)):
+                    original = stat_mode(path)
+                    path.chmod(mode)
+                    result, calls = replay()
+                    path.chmod(original)
+                    self.assertEqual((result.returncode, calls), (1, 0))
+                    self.assertEqual(result.stderr, "macos first boot: " + message + "\n")
+            moved = stage.with_name("moved.zsh")
+            stage.rename(moved)
+            stage.symlink_to(moved)
+            result, calls = replay()
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertEqual(result.stderr, "macos first boot: stage path needs review\n")
+            self.assertEqual(moved.stat().st_nlink, 1)
+            stage.unlink()
+            os.link(moved, stage)
+            result, calls = replay()
+            self.assertEqual((result.returncode, calls), (1, 0))
+            self.assertEqual(result.stderr, "macos first boot: stage owner or mode refused\n")
+
+    def test_replay_uses_existing_rights_only(self):
+        documents = [name for name, resource in self.runtime["Resources"].items() if resource["Type"] == "AWS::SSM::Document"]
+        self.assertEqual(documents, ["SessionDocument"])
+        policy = self.operator_statements(True)
+        instance = f"arn:aws:ec2:us-east-1:{ACCOUNT}:instance/i-fixture"
+        context = {"aws:RequestedRegion": "us-east-1", "ssm:resourceTag/Variant": "macos"}
+        self.assertTrue(decision(policy, "ssm:SendCommand", instance, context))
+        self.assertTrue(decision(policy, "ssm:SendCommand", "arn:aws:ssm:us-east-1::document/AWS-RunShellScript", context))
+        for document in (f"arn:aws:ssm:us-east-1:{ACCOUNT}:document/fixture-kit-macos-first-boot",
+                         f"arn:aws:ssm:us-east-1:{ACCOUNT}:document/fixture-kit-macos-session"):
+            self.assertFalse(decision(policy, "ssm:SendCommand", document, context))
+        for action in ("ssm:GetCommandInvocation", "ssm:DescribeInstanceInformation"):
+            self.assertTrue(decision(policy, action, "*", context))
+        self.assertTrue(decision(policy, "secretsmanager:GetSecretValue", PARAMS["EnvironmentSecret"], context))
 
     def test_scoped_role_equals_boundary(self):
         by_sid = lambda statements: {s["Sid"]: s for s in statements}

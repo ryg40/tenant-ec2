@@ -51,10 +51,10 @@ Use `openssl rand -hex 32` for a new random secret unless its row requires anoth
 | `EC2_LITELLM_POSTGRES_PASSWORD` | Gateway database login. | Generate a separate random secret. Use it only for this database user. |
 | `EC2_LITELLM_UI_PASSWORD` | Gateway UI login. | Generate a separate random secret. Keep the UI off public model routes. |
 | `EC2_OPENVIKING_ROOT_API_KEY` | Memory server administration. | Generate a random secret. Do not give it to the agent. |
-| `EC2_OPENVIKING_LITELLM_API_KEY` | Memory embedding and vision calls. | Create it through `/key/generate` on the gateway. Allow only active embedding and vision routes. |
+| `EC2_OPENVIKING_LITELLM_API_KEY` | Memory embedding and vision calls. | The bootstrap creates it through `/key/generate` on the gateway. It allows each active embedding and Luna route. |
 | `EC2_PI_DURABLE_API_KEY` | Agent client bearer. | Generate a random secret. Give it only to clients of this agent. |
-| `EC2_PI_DURABLE_LITELLM_API_KEY` | Agent model calls. | Create a virtual key for the selected agent route only. Set a budget. |
-| `EC2_PI_DURABLE_OPENVIKING_API_KEY` | Agent memory calls. | Create one agent account through the OpenViking admin API. Use its user key, not the root key. |
+| `EC2_PI_DURABLE_LITELLM_API_KEY` | Agent model calls. | The bootstrap creates this virtual key. It allows each active Luna route and sets no budget; set a budget in the gateway when you need a spending limit. |
+| `EC2_PI_DURABLE_OPENVIKING_API_KEY` | Agent memory calls. | The bootstrap creates one agent account through the OpenViking admin API and uses its user key, not the root key. |
 | `EC2_OK_ENTRA_TENANT_ID` | Login tenant identifier. Not a secret. | `scripts/entra-app.sh apply` writes it. Use one tenant, not the multi-tenant `common` issuer. |
 | `EC2_OK_ENTRA_GROUP_ID` | Object id of the one permitted security group. Not a secret. | `scripts/entra-app.sh apply` creates the group and writes its id. Only a member of this group passes the gate. |
 | `EC2_OK_OIDC_CLIENT_ID` | Login application identifier. Not a secret. | `scripts/entra-app.sh apply` creates a dedicated single-tenant application with the callback `https://ok.<domain>/oauth2/callback` and writes its id. |
@@ -65,7 +65,7 @@ The five gate names are core names. The three identifiers are not secrets, but t
 
 The gate checks the group itself. `scripts/entra-app.sh apply --assign-group` also requires application assignment in Entra ID. That second lock needs an Entra ID P1 or P2 licence.
 
-The script writes into `.env` only. It refuses the sample file `.env.example`. The [Entra page](entra.md) has the same steps by hand, the form of the cookie secret and the renewal of each secret.
+The script writes into one environment file only: `.env`, or the file of `--env-file`. It refuses the sample file `.env.example`. The [Entra page](entra.md) has the same steps by hand, the form of the cookie secret and the renewal of each secret.
 
 Not verified: a live app registration or a live group login. No call to Azure ran.
 
@@ -82,7 +82,7 @@ A missing or empty generated secret permits creation of the missing service keys
 An explicit nonempty private-file value stays unchanged. For rotation, reconcile both secrets and the service database under a separate approval.
 
 `scripts/aws-host.sh generated-status` prints the three names with `present` or `absent`, never a value.
-`verify` requires all three names. Presence proves neither credential validity nor agreement with a service database.
+`verify` requires all three names when `<Project>/generated` exists; without that secret it prints a skip line. Presence proves neither credential validity nor agreement with a service database.
 Use a private Secrets Manager read for approved external copies. Never print a key into Systems Manager output or a transcript.
 The kit does not write Bitwarden or Vault during bootstrap.
 
@@ -96,7 +96,7 @@ These values are not credentials. They still identify a deployment and must stay
 | --- | --- | --- |
 | `EC2_DOMAIN` | Domain subtree for service names. | Use a domain you control. Put only the needed records below it. |
 | `COMPOSE_PROJECT_NAME` | Compose resource prefix. | Use a name unique on the machine. |
-| `COMPOSE_FILE` | Active Compose file set. | Let the bootstrap derive it from `EC2_OPTIONS`. |
+| `COMPOSE_FILE` | Active Compose file set. | Let the bootstrap derive it from `EC2_OPTIONS`. For `macos`, the secret writer sets `compose.macos.yaml`. |
 | `EC2_TZ` | Container time zone. | Keep `Etc/UTC` unless the deployment needs another zone. |
 | `EC2_LITELLM_UI_USERNAME` | Gateway UI user. | Choose a deployment-specific user. This is not a model key. |
 | `EC2_AWS_REGION` | AWS region. | Select a region allowed by the provisioner and the model. |

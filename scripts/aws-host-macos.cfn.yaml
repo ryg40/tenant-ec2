@@ -11,6 +11,8 @@ Description: The Mac runtime on an existing M2 Dedicated Host, with private serv
 # ec2-macos-init, Userdata (ExecuteUserData must be enabled on the reviewed AMI):
 # https://github.com/aws/ec2-macos-init#userdata
 # Not verified: AMI startup, retained-volume recovery, scoped sessions, or the Podman runtime.
+# Not verified: the first-boot stage lock (zsh/system) and its replay through AWS-RunShellScript on the AMI.
+# Not verified: an SSH key login or a Run As session of the PIN account before the lockdown on the AMI.
 # No Memory resource policy exists here. The identity policy and separate boundary limit this role only.
 Parameters:
   Project:
@@ -175,7 +177,7 @@ Resources:
     UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub ${Project}/macos/env
-      Description: Private Mac service settings. Populate after stack creation, then retry bootstrap.
+      Description: Private Mac service settings. Populate after stack creation, then replay the first boot with host-bootstrap.
       SecretString: '{}'
       Tags:
         - {Key: Project, Value: !Ref Project}
@@ -361,12 +363,13 @@ Resources:
           export AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
           die() { print -u2 -- "macos user data: $1"; exit 1; }
           [[ ! -L /etc/${Project} && ! -L /etc/${Project}/machine.json ]] || die 'machine path needs review'
+          [[ ! -L /etc/${Project}/macos && ! -L /etc/${Project}/macos/first-boot.zsh ]] || die 'stage path needs review'
           for target in /opt /opt/${Project} /opt/${Project}/macos /opt/${Project}/macos/snapshot /opt/${Project}/macos/snapshot/.git; do
             [[ ! -L "$target" ]] || die 'snapshot path needs review'
           done
           install -d -o root -g admin -m 0755 /etc/${Project}
           install -d -o root -g admin -m 0700 /etc/${Project}/macos /opt/${Project}/macos
-          temp=$(mktemp -d /etc/${Project}/macos/bootstrap.XXXXXXXX)
+          temp=$(mktemp -d /etc/${Project}/macos/userdata.XXXXXXXX)
           trap 'rm -rf -- "$temp"' EXIT
           account=$(print -r -- '${DeveloperPin}' | tr '[:upper:]' '[:lower:]')
           # The parameter patterns exclude JSON escapes and shell syntax from every injected string.
@@ -403,12 +406,56 @@ Resources:
           EOT
           plutil -lint "$temp/machine.json" >/dev/null 2>&1 || die 'invalid machine settings'
           install -o root -g admin -m 0644 "$temp/machine.json" /etc/${Project}/machine.json
-          # This is staging only. The bootstrap verifies and mounts the data disk before runtime writes.
+          # The first-boot stage. This boot and each reviewed replay (scripts/aws-host.sh host-bootstrap)
+          # run the same root-owned file. It keeps the snapshot values of this boot and holds no secret value.
+          cat >"$temp/first-boot.zsh" <<'STAGE'
+          #!/bin/zsh
+          [[ ! -o xtrace ]] || exit 1
+          set -eu
+          set -o pipefail
+          umask 077
+          export PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin
+          export HOME=/var/root
+          cd /
+          unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
+          unset AWS_ROLE_ARN AWS_ROLE_SESSION_NAME AWS_WEB_IDENTITY_TOKEN_FILE AWS_ENDPOINT_URL
+          unset AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_CREDENTIALS_RELATIVE_URI AWS_CONTAINER_AUTHORIZATION_TOKEN
+          export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=false
+          export AWS_IGNORE_CONFIGURED_ENDPOINT_URLS=true AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
+          die() { print -u2 -- "macos first boot: $1"; exit 1; }
+          say() { print -r -- "macos first boot: $1"; }
+          # No argument: run up to the lockdown gate. --lockdown: the operator approves the lockdown.
+          phase=()
+          if (( $# )); then
+            [[ $# -eq 1 && $1 == --lockdown ]] || die 'stage argument refused'
+            phase=(--lockdown)
+          fi
+          stage=/etc/${Project}/macos
           repo=/opt/${Project}/macos/snapshot
+          for target in /etc/${Project} $stage $stage/first-boot.lock $stage/first-boot.done /etc/${Project}/machine.json \
+              /opt /opt/${Project} /opt/${Project}/macos $repo $repo/.git; do
+            [[ ! -L "$target" ]] || die 'stage path needs review'
+          done
+          [[ -f /etc/${Project}/machine.json ]] || die 'machine settings missing'
+          # One stage at a time. The lock ends with this process, also after a crash.
+          zmodload zsh/system 2>/dev/null || die 'stage lock unavailable'
+          : >>$stage/first-boot.lock
+          zsystem flock -t 0 -f lock_fd $stage/first-boot.lock 2>/dev/null || die 'stage already running; wait for it to end'
+          if [[ -e $stage/first-boot.done ]]; then
+            (( ! $#phase )) || die 'lockdown refused; the first-boot stage is complete'
+            say 'already complete; no replay needed'
+            exit 0
+          fi
+          say start
+          temp=$(mktemp -d $stage/bootstrap.XXXXXXXX)
+          partial=
+          trap 'rm -rf -- "$temp"; [[ -z "$partial" ]] || rm -rf -- "$partial"' EXIT
+          # This is staging only. The bootstrap verifies and mounts the data disk before runtime writes.
           aws --region '${AWS::Region}' secretsmanager get-secret-value --secret-id '${EnvironmentSecret}' \
-            --query SecretString --output text >"$temp/env.json" 2>/dev/null || die 'environment pending; explicit retry required'
-          plutil -lint "$temp/env.json" >/dev/null 2>&1 || die 'invalid environment; explicit retry required'
-          [[ "$(tr -d '[:space:]' <"$temp/env.json")" != '{}' ]] || die 'environment pending; explicit retry required'
+            --query SecretString --output text >"$temp/env.json" 2>/dev/null || die 'environment unreadable; replay required'
+          plutil -lint "$temp/env.json" >/dev/null 2>&1 || die 'invalid environment; replay required after a new secret write'
+          [[ "$(tr -d '[:space:]' <"$temp/env.json")" != '{}' ]] || die 'environment pending; replay required after the secret write'
+          say 'environment read'
           cat >"$temp/askpass" <<'EOT'
           #!/bin/zsh
           [[ ! -o xtrace ]] || exit 1
@@ -422,18 +469,39 @@ Resources:
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
           if [[ ! -d "$repo/.git" ]]; then
             [[ ! -e "$repo" ]] || die 'snapshot destination needs review'
-            git -c credential.helper= clone --depth 1 --branch '${SnapshotTag}' '${SnapshotRepository}' "$repo" \
-              >/dev/null 2>&1 || die 'snapshot clone failed; explicit cleanup and retry required'
+            # Only a complete clone at the pinned commit gets the snapshot name; the trap removes a partial one.
+            partial=$(mktemp -d /opt/${Project}/macos/snapshot.partial.XXXXXXXX)
+            git -c credential.helper= clone --depth 1 --branch '${SnapshotTag}' '${SnapshotRepository}' "$partial" \
+              >/dev/null 2>&1 || die 'snapshot clone failed; replay required after a check of the clone token and tag'
+            [[ "$(git -C "$partial" rev-parse HEAD 2>/dev/null)" = '${SnapshotCommit}' ]] || die 'snapshot commit differs'
+            mv -- "$partial" "$repo"
+            partial=
           fi
           [[ "$(git -C "$repo" rev-parse HEAD 2>/dev/null)" = '${SnapshotCommit}' ]] || die 'snapshot commit differs'
           tree_state=$(git -C "$repo" status --porcelain --untracked-files=all 2>/dev/null) || die 'snapshot status unreadable'
           [[ -z "$tree_state" ]] || die 'snapshot has local changes'
           [[ -f "$repo/scripts/host-bootstrap-macos.sh" ]] || die 'snapshot lacks Mac bootstrap'
           unset MACOS_BOOT_ENV GIT_ASKPASS
+          say 'snapshot verified'
           # Keep the private JSON until bootstrap returns; the EXIT trap removes it on success or failure.
           chmod 0600 "$temp/env.json"
+          boot=0
           /bin/zsh "$repo/scripts/host-bootstrap-macos.sh" \
-            --machine /etc/${Project}/machine.json --env-file "$temp/env.json"
+            --machine /etc/${Project}/machine.json --env-file "$temp/env.json" $phase || boot=$?
+          # Exit 3: the first phase ended before the lockdown. The stage is not complete.
+          if (( boot == 3 )); then
+            say 'lockdown pending; run recovery-check, then host-bootstrap --apply --lockdown'
+            exit 0
+          fi
+          (( boot == 0 )) || exit $boot
+          : >$stage/first-boot.done
+          say complete
+          STAGE
+          /bin/zsh -n "$temp/first-boot.zsh" || die 'invalid first-boot stage'
+          install -o root -g wheel -m 0700 "$temp/first-boot.zsh" /etc/${Project}/macos/first-boot.zsh
+          rm -rf -- "$temp"
+          trap - EXIT
+          exec /bin/zsh /etc/${Project}/macos/first-boot.zsh
       Tags:
         - {Key: Name, Value: !Sub '${Project}-macos-host'}
         - {Key: Project, Value: !Ref Project}

@@ -80,4 +80,4 @@ The snapshot chain shares no commit with development. The snapshot identity is n
 
 Warning: The tool exposes `--allow-public` and `--visibility-checked`. Neither option grants publication approval or replaces content review.
 
-Not verified: publication of the revised publish set. A rehearsal creates snapshot refs only in a throwaway clone.
+The tool publishes the revised publish set as portable snapshots. A rehearsal creates snapshot refs only in a throwaway clone.

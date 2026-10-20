@@ -99,6 +99,19 @@ _Avoid_: host key, machine account
 The initial script that a new instance runs to obtain the install kit and start host preparation.
 _Avoid_: init script, startup payload
 
+**First-boot replay**:
+The reviewed Mac command that runs the first-boot stage of the user data again after the operator writes the environment secret.
+_Avoid_: retry script, manual rerun
+
+**Account lockdown**:
+The Mac bootstrap step that disables the default interactive accounts and limits SSH to the PIN account.
+It runs once, on the `--lockdown` approval of the operator after the recovery check. The host does not run the check itself.
+_Avoid_: hardening run, lock step
+
+**Recovery check**:
+The operator check before the account lockdown: an SSH login of the PIN account with the owner key through SSM, and a Run As session.
+_Avoid_: login test, smoke login
+
 **Bootstrap**:
 The script that brings a prepared host to a running Compose stack.
 A second run keeps the same result unless the inputs change.
@@ -128,6 +141,11 @@ _Avoid_: memory tier, namespace group
 The administrator-owned set of shared memory, optional file storage and user permissions for one stage.
 It is separate from the host stack and its OpenViking service.
 _Avoid_: memory server, shared host stack
+
+**AWS view**:
+An interactive HTML page of `docs/` that archify builds from a typed JSON source in `docs/diagrams/`, with the look of an AWS architecture diagram from `scripts/archify-aws-look.py`.
+The core view, the memory view and the Mac view are AWS views. The step view is an archify workflow with the same colours.
+_Avoid_: archify diagram, system view
 
 **Namespace**:
 A path that groups memory records and defines their access scope.

@@ -68,6 +68,10 @@ PUBLISH = (
     "docs/diagrams/04-install-flow.svg",
     "docs/diagrams/05-options.excalidraw", "docs/diagrams/05-options.json", "docs/diagrams/05-options.svg",
     "docs/diagrams/architecture-graph.json", "docs/architecture.html",
+    "docs/diagrams/aws-core.architecture.json", "docs/aws-core.html", "docs/diagrams/aws-core.svg",
+    "docs/diagrams/aws-memory.architecture.json", "docs/aws-memory.html", "docs/diagrams/aws-memory.svg",
+    "docs/diagrams/aws-mac.architecture.json", "docs/aws-mac.html", "docs/diagrams/aws-mac.svg",
+    "docs/diagrams/memory-terminal.workflow.json", "docs/memory-terminal.html",
 )
 # Directory rules: (directory, technical excludes relative to that directory).
 # A rule publishes each tracked file under the directory. Private-copy exclusions belong
@@ -91,7 +95,16 @@ PATTERNS = (
 # The exception is the exact line text, not a line number: each copy of the text in that
 # file is dropped. Add an entry only after review; a changed line is a new finding.
 # This file is in the publish set too, so split each text where PATTERNS would match.
-PATTERN_ALLOW = ()
+# The viewer code that archify embeds in each generated view holds three lines with a JavaScript
+# variable named for a motion marker. They hold no credential. Reviewed for archify 3.2.0.
+ARCHIFY_VIEWS = ("docs/aws-core.html", "docs/aws-memory.html", "docs/aws-mac.html", "docs/memory-terminal.html")
+PATTERN_ALLOW = tuple(
+    (path, line) for path in ARCHIFY_VIEWS for line in (
+        "        var tok" "en = document.createElementNS(svgNamespace, 'g');",
+        "            var tok" "en = relationshipTokenGeometry(shapes[0], tokenKind, key);",
+        "          tok" "en = Archify.motionGovernor.claim('route', function () {",
+    )
+)
 # A variable of the environment example whose name holds one of these words is a secret:
 # its value must be empty. Each other variable may hold a portable default.
 ENV_EXAMPLE = ".env.example"

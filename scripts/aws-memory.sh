@@ -1,7 +1,9 @@
 #!/bin/bash
 # Manage one shared memory stack. See docs/reference/memory-template.md.
 # Usage: scripts/aws-memory.sh <command> --stage dev|test|prod [options]
-#   deploy         check the template and preview a change set; --apply executes it
+#   deploy         check the template and print the change set command (no AWS call);
+#                  --prepare creates and shows a change set and stops;
+#                  --execute NAME checks that change set and executes it
 #   outputs        print outputs with account numbers hidden; --write saves private JSON
 #   users          list the users from the stack outputs
 #   keys           list users without keys; --apply creates and saves their keys
@@ -9,8 +11,10 @@
 #   check          report key count, boundary and policy presence (read only)
 #   client-config  render the config for --actor from the saved outputs (no AWS call)
 #   delete-stack   show retained resources; --apply deletes the stack; prod needs --i-know
-# Options: --profile NAME, --dry-run, --apply, --write, --user NAME, --actor ID, --i-know.
-# Every AWS write needs --apply and an explicit --profile. A dry run of deploy calls no AWS API.
+# Options: --profile NAME, --dry-run, --apply, --prepare, --execute NAME, --write, --user NAME,
+# --actor ID, --i-know.
+# Every AWS write needs an explicit --profile and a write flag: --prepare or --execute for deploy,
+# --apply for the other commands. deploy refuses --apply. A dry run of deploy calls no AWS API.
 # Settings: EC2_PROJECT=tenant-ec2, EC2_AWS_REGION=us-east-1,
 # EC2_AWS_ADMIN_PROFILE=tenant-ec2-admin, EC2_MEMORY_ADMINISTRATOR_ROLE=Administrator,
 # EC2_MEMORY_ADMINISTRATOR_USER= (optional IAM user name; require MFA separately).
@@ -32,7 +36,7 @@ admin_user=${EC2_MEMORY_ADMINISTRATOR_USER:-}
 command=${1:-}
 [ "$#" -eq 0 ] || shift
 stage='' actor='' user=''
-apply=0 dry=0 write=0 know=0 explicit_profile=0
+apply=0 dry=0 write=0 know=0 explicit_profile=0 prepare=0 execute=''
 
 die() { printf 'aws-memory: %s\n' "$*" >&2; exit 1; }
 need_value() { [ "$#" -ge 2 ] && [ -n "$2" ] && [[ $2 != --* ]] || die "missing option value"; }
@@ -43,6 +47,8 @@ while [ "$#" -gt 0 ]; do
         --actor) need_value "$@"; actor=$2; shift ;;
         --user) need_value "$@"; user=$2; shift ;;
         --apply) apply=1 ;;
+        --prepare) prepare=1 ;;
+        --execute) need_value "$@"; execute=$2; shift ;;
         --dry-run) dry=1 ;;
         --write) write=1 ;;
         --i-know) know=1 ;;
@@ -58,6 +64,23 @@ case $stage in dev|test|prod) ;; *) die "--stage must be dev, test or prod" ;; e
 [[ $admin_role =~ ^[a-zA-Z0-9_+=,.@-]{1,64}$ ]] || die "invalid administrator role: use one IAM role name without a path or wildcard"
 [[ $admin_user =~ ^[a-zA-Z0-9_+=,.@-]{0,64}$ ]] || die "invalid administrator user: use an empty value or one IAM user name without a path or wildcard"
 [ "$apply$dry" != 11 ] || die "--apply and --dry-run conflict"
+step=''
+if [ "$command" = deploy ]; then
+    # The owner reviews the change set between the two steps; one call never does both.
+    [ "$apply" -eq 0 ] || die "deploy has two steps: --prepare creates and shows the change set, then --execute <change-set-name> executes it"
+    [ "$prepare" -eq 0 ] || step=prepare
+    if [ -n "$execute" ]; then
+        [ -z "$step" ] || die "--prepare and --execute conflict"
+        step=execute
+        [[ $execute =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || die "--execute needs the change set name that --prepare printed, not an ARN"
+    fi
+    if [ -n "$step" ]; then
+        [ "$dry" -eq 0 ] || die "--$step and --dry-run conflict"
+        [ "$explicit_profile" -eq 1 ] || die "an AWS write needs --$step and --profile"
+    fi
+elif [ "$prepare" -eq 1 ] || [ -n "$execute" ]; then
+    die "--prepare and --execute belong to deploy"
+fi
 [ "$apply" -eq 0 ] || [ "$explicit_profile" -eq 1 ] || die "an AWS write needs --apply and --profile"
 case $command in deploy|keys|rotate|delete-stack) ;; *) [ "$apply$dry" = 00 ] || die "this command has no --apply or --dry-run" ;; esac
 [ "$write" -eq 0 ] || [ "$command" = outputs ] || die "--write belongs to outputs"
@@ -82,8 +105,14 @@ json_value() {
 import json, os, re, sys, tempfile
 from pathlib import Path
 
+class Refused(Exception):
+    """A refusal with a fixed text from this script, never from the reply."""
+
 def fail():
     raise ValueError("invalid reply")
+
+def redact(text):
+    return re.sub(r"\b[0-9]{12}\b", "<account>", text)
 
 def outputs(data):
     allowed = {"MemoryId", "MemoryArn", "BucketName", "BoundaryArn", "PersonUsers", "SubmitUser", "WorkerUser"}
@@ -186,14 +215,40 @@ try:
             account = args[1].split(":")[4]
             if not any(p["PolicyArn"].split(":")[4] == account for p in data["AttachedPolicies"]):
                 fail()
-    elif mode == "changes":
-        for change in data.get("Changes", []):
-            row = change["ResourceChange"]
-            print(re.sub(r"\b[0-9]{12}\b", "<account>", " ".join(str(row.get(k, "-")) for k in ("Action", "LogicalResourceId", "ResourceType", "Replacement"))))
+    elif mode in ("changeset", "changeset-id"):
+        # Arguments: region, stack, change set name, then Key=Value for each expected parameter.
+        region, stack, name, *pairs = args
+        expected = dict(pair.split("=", 1) for pair in pairs)
+        arn = r"arn:aws[a-z-]*:cloudformation:" + re.escape(region) + r":[0-9]{12}:"
+        if (data.get("StackName") != stack or data.get("ChangeSetName") != name
+                or not re.fullmatch(arn + "stack/" + re.escape(stack) + r"/[A-Za-z0-9-]+", str(data.get("StackId", "")))
+                or not re.fullmatch(arn + "changeSet/" + re.escape(name) + r"/[A-Za-z0-9-]+", str(data.get("ChangeSetId", "")))):
+            raise Refused("the change set does not belong to the stack of this stage")
+        rows = data.get("Parameters", [])
+        found = {row["ParameterKey"]: row.get("ParameterValue", "") for row in rows}
+        if len(found) != len(rows) or found != expected:
+            raise Refused("the change set parameters differ from the current settings of this stage")
+        if mode == "changeset":
+            print("Stack: " + stack)
+            print("Change set: " + name)
+            print("Status: " + str(data.get("Status", "-")))
+            print("Execution status: " + str(data.get("ExecutionStatus", "-")))
+            if data.get("StatusReason"):
+                print("Reason: " + redact(" ".join(str(data["StatusReason"]).split())))
+            changes = data.get("Changes", [])
+            print("Resource changes: " + str(len(changes)))
+            for change in changes:
+                row = change["ResourceChange"]
+                print(redact(" ".join(str(row.get(k, "-")) for k in ("Action", "LogicalResourceId", "ResourceType", "Replacement"))))
         if data.get("Status") != "CREATE_COMPLETE" or data.get("ExecutionStatus") != "AVAILABLE":
-            fail()
+            raise Refused("the change set is not ready: it needs the status CREATE_COMPLETE and the execution status AVAILABLE")
+        if mode == "changeset-id":
+            print(data["ChangeSetId"])
     else:
         fail()
+except Refused as refusal:
+    print("aws-memory: " + str(refusal), file=sys.stderr)
+    sys.exit(1)
 except (ValueError, KeyError, TypeError, IndexError, OSError):
     print("aws-memory: cannot read or store the expected data", file=sys.stderr)
     sys.exit(1)
@@ -239,36 +294,53 @@ create_key() {
 
 case $command in
 deploy)
-    [ -f "$here/aws-memory.py" ] || die "the memory renderer is missing"
-    python3 "$here/aws-memory.py" check --stage "$stage"
-    [ -f "$here/aws-memory-$stage.cfn.yaml" ] || die "the generated template is missing"
-    deploy=(cloudformation deploy --template-file "scripts/aws-memory-$stage.cfn.yaml"
-        --stack-name "$stack" --capabilities CAPABILITY_NAMED_IAM --no-execute-changeset
-        --no-fail-on-empty-changeset --tags "Project=$project" "Stage=$stage"
-        --parameter-overrides "Project=$project" "Stage=$stage" "AdministratorRole=$admin_role" "AdministratorUser=$admin_user")
-    show_aws "${deploy[@]}"
-    [ "$apply" -eq 1 ] || exit 0
-    cd "$top"
-    reply=$(aws_cli "${deploy[@]}") || die "cannot prepare the change set"
-    if [[ $reply == *'No changes to deploy.'* ]]; then
-        printf 'No changes to deploy.\n'
-        exit 0
-    fi
-    # The CLI returns the exact new change set in its review command. Never select the latest set.
-    change_set=$(printf '%s' "$reply" | python3 -c '
+    parameters=("Project=$project" "Stage=$stage" "AdministratorRole=$admin_role" "AdministratorUser=$admin_user")
+    if [ "$step" != execute ]; then
+        [ -f "$here/aws-memory.py" ] || die "the memory renderer is missing"
+        python3 "$here/aws-memory.py" check --stage "$stage"
+        [ -f "$here/aws-memory-$stage.cfn.yaml" ] || die "the generated template is missing"
+        deploy=(cloudformation deploy --template-file "scripts/aws-memory-$stage.cfn.yaml"
+            --stack-name "$stack" --capabilities CAPABILITY_NAMED_IAM --no-execute-changeset
+            --no-fail-on-empty-changeset --tags "Project=$project" "Stage=$stage"
+            --parameter-overrides "${parameters[@]}")
+        show_aws "${deploy[@]}"
+        [ "$step" = prepare ] || exit 0
+        cd "$top"
+        reply=$(aws_cli "${deploy[@]}") || die "cannot prepare the change set"
+        if [[ $reply == *'No changes to deploy.'* ]]; then
+            printf 'No changes to deploy. No change set waits for execution.\n'
+            exit 0
+        fi
+        # The CLI returns the exact new change set in its review command. Never select the latest set.
+        change_set=$(printf '%s' "$reply" | python3 -c '
 import re, sys
 matches = re.findall(r"--change-set-name (arn:[A-Za-z0-9-]+:cloudformation:[a-z0-9-]+:[0-9]{12}:changeSet/[A-Za-z0-9-]+/[A-Za-z0-9-]+)", sys.stdin.read())
 if len(matches) != 1:
     sys.exit(1)
 print(matches[0])
 ') || die "cannot identify the new change set; nothing executes"
-    changes=$(aws_cli cloudformation describe-change-set --stack-name "$stack" --change-set-name "$change_set") || die "cannot read the new change set"
-    printf '%s' "$changes" | json_value changes || die "the change set is not ready; nothing executes"
-    change_name=${change_set#*:changeSet/}
-    change_name=${change_name%%/*}
+        change_name=${change_set#*:changeSet/}
+        change_name=${change_name%%/*}
+        # The deploy command waits for the creation too. The status check below decides.
+        aws_cli cloudformation wait change-set-create-complete --stack-name "$stack" --change-set-name "$change_set" >/dev/null || true
+    else
+        # Only the named change set of this stack. Never select another or the latest set.
+        change_set=$execute change_name=$execute
+    fi
+    reply=$(aws_cli cloudformation describe-change-set --stack-name "$stack" --change-set-name "$change_set") || die "cannot read the change set $change_name of $stack"
+    printf '%s' "$reply" | json_value changeset "$region" "$stack" "$change_name" "${parameters[@]}" || die "nothing executes"
+    if [ "$step" = prepare ]; then
+        printf 'The change set waits. Nothing executes in this step.\n'
+        printf 'After the owner word for the execute step, run with the same settings:\n'
+        show_command scripts/aws-memory.sh deploy --stage "$stage" --execute "$change_name" --profile "$profile"
+        exit 0
+    fi
+    change_id=$(printf '%s' "$reply" | json_value changeset-id "$region" "$stack" "$change_name" "${parameters[@]}") || die "nothing executes"
     show_aws cloudformation execute-change-set --stack-name "$stack" --change-set-name "$change_name"
-    aws_cli cloudformation execute-change-set --stack-name "$stack" --change-set-name "$change_set" >/dev/null || die "cannot execute the change set"
-    printf 'Change set execution starts. Check the stack status before the next command.\n'
+    aws_cli cloudformation execute-change-set --stack-name "$stack" --change-set-name "$change_id" >/dev/null || die "cannot execute the change set"
+    unset change_id
+    printf 'Change set execution starts. Read the stack status before the next command:\n'
+    show_aws cloudformation describe-stacks --stack-name "$stack" --query 'Stacks[0].StackStatus' --output text
     ;;
 outputs)
     load_outputs

@@ -42,7 +42,8 @@ The sample environment file groups values by purpose:
 | --- | --- |
 | `# ===== Part 1: the names of the core =====` | Required core names, subject to the documented first-boot exceptions. |
 | `# ===== Part 2: settings =====` | Settings and portable defaults. |
-| `# ===== Part 3: the names of the options =====` | Option and DNS provider blocks. |
+| `# ===== Part 3: the names of the options =====` | Option, DNS provider and Mac variant blocks. |
+| `# ----- Variant macos -----` | Read only with `EC2_VARIANT=macos`. See [Variants](../variants.md#prepare-and-install). |
 | `# ----- Option pangolin -----` | Empty names are required only when Pangolin is selected. |
 | `# ----- Option copilot -----` | Empty names are required only when Copilot is selected. |
 | `# ----- DNS provider porkbun -----` | Read by `dns` for Porkbun. Also sent to the host only when Pangolin needs DNS-01. |

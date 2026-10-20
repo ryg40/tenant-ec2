@@ -1,0 +1,484 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Shared memory from the terminal: one person on the dev stage",
+    "locale": "en",
+    "output": "memory-terminal.html",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "frontend": {
+          "label": "Step in the terminal of the person"
+        },
+        "backend": {
+          "label": "Command or memory client"
+        },
+        "database": {
+          "label": "AWS store of the stage"
+        },
+        "security": {
+          "label": "Key, offboarding or IAM refusal"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "admin",
+      "label": "Administrator"
+    },
+    {
+      "id": "person",
+      "label": "Person in the terminal"
+    },
+    {
+      "id": "files",
+      "label": "Stage bucket (S3)"
+    },
+    {
+      "id": "client",
+      "label": "Memory client (Pi or Claude Code)"
+    },
+    {
+      "id": "memory",
+      "label": "AgentCore memory of the stage"
+    },
+    {
+      "id": "refused",
+      "label": "Refused by the IAM rules",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "handover",
+      "label": "Key hand-over and set-up",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "daily",
+      "label": "Daily use",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "end",
+      "label": "End of access",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "keys",
+    "store",
+    "prompt",
+    "propose",
+    "review"
+  ],
+  "nodes": [
+    {
+      "id": "keys",
+      "lane": "admin",
+      "col": 0,
+      "yOffset": -40,
+      "type": "security",
+      "icon": "person",
+      "label": "Create the key",
+      "sublabel": "aws-memory.sh keys --apply",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "config",
+      "lane": "admin",
+      "col": 0,
+      "yOffset": 40,
+      "type": "backend",
+      "label": "Render the config",
+      "sublabel": "aws-memory.sh client-config",
+      "tag": "not verified"
+    },
+    {
+      "id": "store",
+      "lane": "person",
+      "col": 1,
+      "yOffset": -40,
+      "type": "frontend",
+      "icon": "person",
+      "label": "Store key and config",
+      "sublabel": "credentials + config.json",
+      "tag": "not verified"
+    },
+    {
+      "id": "kill",
+      "lane": "person",
+      "col": 1,
+      "yOffset": 40,
+      "type": "frontend",
+      "icon": "stop",
+      "label": "Kill switch",
+      "sublabel": "AGENTCORE_MEMORY_DISABLE=1",
+      "tag": "not verified"
+    },
+    {
+      "id": "off",
+      "lane": "client",
+      "col": 1,
+      "type": "backend",
+      "icon": "stop",
+      "label": "Memory off",
+      "sublabel": "stops every AWS call",
+      "tag": "not verified"
+    },
+    {
+      "id": "prompt",
+      "lane": "person",
+      "col": 2,
+      "type": "frontend",
+      "label": "Type a prompt",
+      "sublabel": "in pi or claude",
+      "tag": "not verified"
+    },
+    {
+      "id": "recall",
+      "lane": "client",
+      "col": 2,
+      "type": "backend",
+      "label": "Recall hook",
+      "sublabel": "one retrieval per namespace",
+      "tag": "not verified"
+    },
+    {
+      "id": "reads",
+      "lane": "memory",
+      "col": 2,
+      "type": "database",
+      "label": "Recall namespaces",
+      "sublabel": "/shared/ /actor/<a>/ project shared",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "noread",
+      "lane": "refused",
+      "col": 2,
+      "type": "security",
+      "label": "Refused reads",
+      "sublabel": "other actor, other project",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "propose",
+      "lane": "client",
+      "col": 3,
+      "type": "backend",
+      "label": "Propose tool",
+      "sublabel": "writes after the person says yes",
+      "tag": "not verified"
+    },
+    {
+      "id": "proposal",
+      "lane": "memory",
+      "col": 3,
+      "type": "database",
+      "label": "Proposal record",
+      "sublabel": "/project/<p>/proposals/<a>/",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "nowrite",
+      "lane": "refused",
+      "col": 3,
+      "type": "security",
+      "label": "Refused writes",
+      "sublabel": "project shared, own actor, others",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "usefiles",
+      "lane": "person",
+      "col": 4,
+      "type": "frontend",
+      "label": "Use stage files",
+      "sublabel": "aws s3 with the own profile",
+      "tag": "not verified"
+    },
+    {
+      "id": "bucket",
+      "lane": "files",
+      "col": 4,
+      "type": "database",
+      "label": "Own prefixes",
+      "sublabel": "users/<a>/ and projects/<p>/",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "nofile",
+      "lane": "files",
+      "col": 5,
+      "type": "security",
+      "label": "Refused file calls",
+      "sublabel": "other user, project delete",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "review",
+      "lane": "client",
+      "col": 4,
+      "type": "backend",
+      "label": "Maintainer review",
+      "sublabel": "proposals approve --actor <a>",
+      "tag": "not verified"
+    },
+    {
+      "id": "shared",
+      "lane": "memory",
+      "col": 4,
+      "type": "database",
+      "label": "Project shared",
+      "sublabel": "/project/<p>/shared/",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "nomove",
+      "lane": "refused",
+      "col": 4,
+      "type": "security",
+      "label": "Refused moves, deletes",
+      "sublabel": "member, proposer, any delete",
+      "tag": "dev: proven"
+    },
+    {
+      "id": "offboard",
+      "lane": "admin",
+      "col": 5,
+      "type": "security",
+      "label": "Offboard the person",
+      "sublabel": "offboarded, keys deleted, deploy",
+      "tag": "not verified"
+    },
+    {
+      "id": "gone",
+      "lane": "memory",
+      "col": 5,
+      "type": "database",
+      "label": "User deleted",
+      "sublabel": "records stay in the memory",
+      "tag": "not verified"
+    },
+    {
+      "id": "oldkey",
+      "lane": "refused",
+      "col": 5,
+      "type": "security",
+      "label": "Old key refused",
+      "sublabel": "every call fails",
+      "tag": "not verified"
+    }
+  ],
+  "edges": [
+    {
+      "id": "send-key",
+      "from": "keys",
+      "to": "store",
+      "label": "Bitwarden Send",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "send-config",
+      "from": "config",
+      "to": "store",
+      "label": "same Send",
+      "variant": "default"
+    },
+    {
+      "id": "set-kill",
+      "from": "kill",
+      "to": "off",
+      "label": "set before start",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "start",
+      "from": "store",
+      "to": "prompt",
+      "label": "start the client",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "hook",
+      "from": "prompt",
+      "to": "recall",
+      "label": "each typed prompt",
+      "variant": "default"
+    },
+    {
+      "id": "retrieve",
+      "from": "recall",
+      "to": "reads",
+      "label": "RetrieveMemoryRecords",
+      "variant": "default"
+    },
+    {
+      "id": "read-denied",
+      "from": "reads",
+      "to": "noread",
+      "label": "outside the policy",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "ask",
+      "from": "prompt",
+      "to": "propose",
+      "label": "confirm: yes",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "create",
+      "from": "propose",
+      "to": "proposal",
+      "label": "BatchCreateMemoryRecords",
+      "variant": "default"
+    },
+    {
+      "id": "write-denied",
+      "from": "proposal",
+      "to": "nowrite",
+      "label": "outside the policy",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "wait",
+      "from": "propose",
+      "to": "review",
+      "label": "waits for review",
+      "variant": "emphasis",
+      "role": "main"
+    },
+    {
+      "id": "move",
+      "from": "review",
+      "to": "shared",
+      "label": "BatchUpdateMemoryRecords",
+      "variant": "default"
+    },
+    {
+      "id": "move-denied",
+      "from": "shared",
+      "to": "nomove",
+      "label": "not the maintainer",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "s3",
+      "from": "usefiles",
+      "to": "bucket",
+      "label": "GetObject, PutObject",
+      "variant": "default"
+    },
+    {
+      "id": "file-denied",
+      "from": "bucket",
+      "to": "nofile",
+      "label": "other prefixes",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "deploy",
+      "from": "offboard",
+      "to": "gone",
+      "label": "prepare + execute",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "right",
+      "route": "outside-right",
+      "labelSegment": 1
+    },
+    {
+      "id": "after",
+      "from": "gone",
+      "to": "oldkey",
+      "label": "key deleted",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Commands of the administrator",
+      "items": [
+        "scripts/aws-memory.sh deploy --stage dev --prepare, then --execute <change-set-name>, each with --profile and an owner word",
+        "scripts/aws-memory.sh outputs --stage dev --write saves .local/memory/dev.json (ignored by Git)",
+        "scripts/aws-memory.sh keys --stage dev --apply creates one key per user and gives it to the credential sync on standard input",
+        "scripts/aws-memory.sh client-config --stage dev --actor <a> prints the config: no AWS call, no key",
+        "Offboard: set status offboarded in config/memory/dev.yaml, remove the person from each project list, render, delete the keys of the user, then deploy",
+        "Rotate: scripts/aws-memory.sh rotate --stage dev --user <user> --apply, then delete the old key after the new key works"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Commands of the person",
+      "items": [
+        "Pi: start pi with the AgentCore extension; the launch line sets AGENTCORE_MEMORY_CONFIG_FILE",
+        "Claude Code: claude --plugin-dir packages/agentcore-claude (a path in the tenant-pi kit)",
+        "AGENTCORE_PROJECT=<p> selects the project, because the client config of this design has no remotes or directories; without it, recall reads /shared/ and /actor/<a>/ only and propose ends with project_none",
+        "Maintainer: the agentcore-memory CLI of the tenant-pi core, proposals list --project <p> --actor <a>, then proposals approve or reject with --actor and --id",
+        "Files, an example: aws s3 cp <file> s3://<bucket>/users/<a>/ --profile tenant-ec2-memory-dev-person-<a>",
+        "Kill switch: Pi registers no hook and no tool; in Claude Code the hook prints nothing and each tool answers disabled"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Files that each side holds",
+      "items": [
+        "Administrator: config/memory/dev.yaml, the generated scripts/aws-memory-dev.cfn.yaml, .local/memory/dev.json and the credential sync names TENANT_EC2_MEMORY_DEV_PERSON_<A>_KEY_ID and _SECRET",
+        "Person: ~/.aws/credentials (mode 0600) with the profile tenant-ec2-memory-dev-person-<a>",
+        "Person: ~/.config/agentcore-memory/config.json with schemaVersion, memoryId, region, profile, actorId and projects; it holds no key",
+        "Maintainer: the review ledger ~/.local/state/agentcore-memory/review-ledger.jsonl"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "AWS calls and their scope",
+      "items": [
+        "Recall: RetrieveMemoryRecords on /shared/, /actor/<a>/ and, with a project, /project/<p>/shared/",
+        "Propose: BatchCreateMemoryRecords into /project/<p>/proposals/<a>/ only",
+        "Review: ListMemoryRecords on /project/<p>/proposals/<a>/, then BatchUpdateMemoryRecords from proposals to /project/<p>/shared/ or /project/<p>/rejected/<a>/",
+        "Files: s3:GetObject and s3:PutObject under users/<a>/ and projects/<p>/; s3:DeleteObject under users/<a>/ only",
+        "Every call carries the namespace condition key or an s3:prefix that the person policy and the stage boundary allow"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Refused requests, proven for dev",
+      "items": [
+        "Writes: into project shared, into the own actor namespace, into the proposals of another person or project, and a batch with one refused namespace",
+        "Reads: another actor namespace, a project of which the person is no member, the proposals of another person, and the other memory of the account",
+        "Moves: a member, the proposer and the maintainer of another project",
+        "Deletes: no stage identity deletes a memory record",
+        "Files: the folder of another person, a project of which the person is no member, a delete in a project folder, a list with no prefix"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Proven and not verified",
+      "items": [
+        "Proven for dev: the two-step deploy, one key per user, and the live access tests of the namespaces and prefixes on this page",
+        "Client config: the core parser of tenant-pi accepts the client-config output of the dev stage (validateConfig in packages/agentcore-memory-core/src/index.mjs, an offline check)",
+        "Not verified: the tenant-pi client against a stage of this design, the client-config and Send hand-over, the kill switch against such a stage, offboarding and key rotation",
+        "Not verified: a call with a deleted key on this design; the tenant-pi live proof shows that such a call fails"
+      ]
+    }
+  ]
+}

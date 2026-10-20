@@ -5,7 +5,7 @@ Topology: first-party repository. No upstream remote. The kits are consumed at p
 | Item | Role | Rule |
 | --- | --- | --- |
 | `origin` | the private Gitea repository | writable, private, the issue tracker |
-| `github` | the private GitHub repository | receives only the snapshot branch and the `portable/*` tags |
+| `github` | the GitHub snapshot repository, private by default | receives only the snapshot branch and the `portable/*` tags |
 | `local-dev` | development and tests | host values stay in ignored files; never pushed to `github` |
 | `topic/*` | short-lived work | merge into `local-dev` with `--no-ff`, then delete |
 | `portable` | local snapshot chain | written by `scripts/publish_portable.py` only; never checked out |

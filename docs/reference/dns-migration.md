@@ -77,7 +77,7 @@ A line that is not true stops the procedure.
 ### Rules for each command
 
 - A domain, a record name, a record content, an address and a zone id are host values. They stay in the private directory. They go into no tracked file, no commit message, no tracker text and no report.
-- A command of this page prints counts. It writes each record into a file of the private directory. The owner reads those files.
+- A command of the phases A to D prints counts. It writes each record into a file of the private directory. The owner reads those files. The steps E1 and E2 print each host record with its name and the stack address.
 - A stop of the host record check names a host record by its first label, for example `ok`. That label is a name of the kit. No message holds an address.
 - A credential stays in a file with the mode 0600 that the tool reads. No argument of a command, no address and no line of the output holds a credential. This is the rule of [the DNS scripts](../options/dns.md#where-a-dns-credential-is).
 - Each phase reads only the credential that it needs.
@@ -223,13 +223,13 @@ It stops with a nonzero status at each result that its step does not permit. The
 | `records state <file>` | B1 | The counts of one read of the Porkbun zone. |
 | `records diff <zone file> <result file>` | C3, C4a, C4b, C5 | The comparison of the plan with one read of the Porkbun zone. The lists `to-create.json`, `to-create-api.json` and `to-create-by-hand.txt`. A stop for a probe record that is still in the zone. |
 | `records probe-types`, `probe-body <type>`, `probe-answer <type>`, `probe-compare <type> <file>` | C4a | The probe of one record type, and its result in `probes.json`. |
-| `records count [<file>]`, `body <index>`, `answer` | B3, C4a, C4b | The request body of one new record, and a stop when Porkbun refuses a request. |
-| `records names` | C6 | `names.txt`: one question for each planned record. |
+| `records count [<file>]`, `body <index>`, `answer` | B3, C4a, C4b, D7b | The request body of one new record, and a stop when Porkbun refuses a request. |
+| `records names` | C6 | `names.txt`: one question for each name and type of the plan. An ALIAS row is a question of the type A. |
 | `records preswitch <result file> <result file>` | C6, D1 | The gate before the name server change. A stop when a direct answer of Porkbun is not the planned record. |
 | `records unchanged` | D1 | A stop when the Cloudflare zone changed since Phase A, also in one field of `data`. |
 | `records restore`, `restore-body <index>`, `cloudflare-answer` | D7b | The records that a new Cloudflare zone lacks, with the proxy state and each field of `data`. |
 
-Each command that reads the plan file checks it first. It stops when one line is not true:
+The commands `diff`, `names` and `preswitch` check the plan file first. `records ttl` reads it without these checks. A check stops when one line is not true:
 
 - The plan holds one row for each record of the complete JSON list of step A4. A record with no row and no decision `drop` stops the command, with a count. An empty plan stops.
 - No row has the decision `decide`.
@@ -275,7 +275,7 @@ A record with structured fields, for example an SRV record with its port, has th
 The helper reads `data` as a part of the record: a record with another value in one field of `data` is another record.
 It is the complete inventory of the zone. The plan file, the comparison of step D1 and the way back of step D7b read it.
 
-Not verified: the request with the fields `per_page` and `page`, and the field `result_info` of its answer. The kit reads one name with this request, and it reads no page count.
+Not verified: the request with the fields `per_page` and `page`, and the field `result_info` of its answer. `scripts/dns/cloudflare.sh` reads one name with this request and no page count; only the helper of this page reads `result_info`.
 
 ```sh
 list_zone cloudflare-records
@@ -479,7 +479,8 @@ A default record at the apex conflicts with the apex records of the plan: the ap
 A wildcard default record answers for each name with no record of its own.
 It hides a missing record in the test of step C6, and it sends each unknown name to the parking page.
 
-Name each default record that conflicts in the private sheet, with its id from `porkbun-zone-before.json`.
+Name each default record that conflicts in the private sheet, with its id and its complete content from `porkbun-zone-before.json`.
+Later steps write `porkbun-zone-before.json` again, so the private sheet keeps the content for the way back.
 A default record is removed only after a decision of the owner.
 The owner removes it in the Porkbun account, or the lead removes it with one request for each approved id.
 
@@ -495,7 +496,7 @@ records answer
 echo "delete: Porkbun removed the record"
 ```
 
-The way back is a new record with the content of `porkbun-zone-before.json`.
+The way back is a new record with the content in the private sheet.
 
 ### The check of Phase B
 
@@ -574,13 +575,13 @@ records diff porkbun-zone-before.json diff-before.txt
 | Count | Meaning |
 | --- | --- |
 | `same` | Porkbun holds the record one time, with the planned TTL. |
-| `ttl differs` | Porkbun holds the record with another TTL. The owner corrects it in the Porkbun account, or accepts it. |
+| `ttl differs` | Porkbun holds the record with another TTL. The owner corrects it in the Porkbun account: step C5 requires `0 ttl differs`. |
 | `duplicate` | Porkbun holds the record more than one time. The owner decides which copy to remove. |
 | `create` | Porkbun lacks the record. Step C4 makes it. The rows are in `to-create.json`. |
 | `only at Porkbun` | Porkbun holds a record that the plan lacks. The NS records of Porkbun at the apex are expected. Each other one needs a decision. |
 
 The file `diff-before.txt` names each record.
-A second line starts with `batch:`. It counts the records of `to-create.json` in two lists:
+The second line of the printed output starts with `batch:`. It counts the records of `to-create.json` in two lists:
 
 - `to-create-api.json`: each record whose type has a proof for the API. Step C4b makes these records.
 - `to-create-by-hand.txt`: each other record. Step C4c makes these records.
@@ -747,6 +748,7 @@ The last command is the gate. It passes when each line is true:
 
 Each other result stops the block with the text `the switch is BLOCKED`. The file `preswitch-gate.txt` names each finding.
 A finding names the record by its name and its type, with one reason: `another record set`, `another TTL`, `another value of the field data` or `no address record`. It holds no content.
+Two other findings have no reason: `no direct answer` and `a difference that is not expected`.
 The two result files hold both answers of each difference, and after the line `direct:` each record of the Porkbun name server with its TTL. Read each expected difference and each finding there.
 
 An answer that is not the planned record has one of two causes.
@@ -1225,7 +1227,7 @@ The steps A1, A2, A6, C2 and C3 make no call and need no row.
 | A5 | Lead | The block of step A5: `dig` to the parent zone and to two public resolvers. | Nothing. | Not necessary. |
 | A7, A8 | Owner | The decision list of the private sheet, with each feature of step A8 and each TTL decision. | Nothing at a provider. | A new decision before step C4. |
 | B1 | Lead | The block of step B1: `POST dns/retrieve/<apex domain>`. | Nothing at Porkbun. | Not necessary. |
-| B3 | Owner, or lead | The Porkbun account, or the block of step B3: `POST dns/delete/<apex domain>/<record id>`, one approval for each id. | It deletes one default record at Porkbun. | A new record with the content of `porkbun-zone-before.json`. |
+| B3 | Owner, or lead | The Porkbun account, or the block of step B3: `POST dns/delete/<apex domain>/<record id>`, one approval for each id. | It deletes one default record at Porkbun. | A new record with the content in the private sheet. |
 | C4a | Lead | The block of step C4a: `POST dns/create/<apex domain>`, `POST dns/retrieve/<apex domain>` and `POST dns/delete/<apex domain>/<record id>` for one probe record of each type that waits for a probe. One approval for the list of the types. | One test record of each type at Porkbun, until its removal. No public answer. | The removal of a probe record that stays, with the block of step B3. |
 | C4b | Lead | The block of step C4b: `POST dns/retrieve/<apex domain>`, then `POST dns/create/<apex domain>` for each record of `to-create-api.json`. One approval for the count of the `batch` line. | New records at Porkbun. No public answer. | The removal of each new record by its id, with a new approval. |
 | C4c | Owner | The web form of the Porkbun account, for each record of `to-create-by-hand.txt`. | New records at Porkbun. No public answer. | The removal of each new record in the Porkbun account. |
@@ -1234,14 +1236,16 @@ The steps A1, A2, A6, C2 and C3 make no call and need no row.
 | D1 | Lead | The block of step D1: the export request of step A3 and the list request of step A4 again. | Nothing at Cloudflare. | Not necessary. |
 | D2 | Lead | `PATCH zones/<zone id>/dns_records/<record id>`, only for a TTL that the owner names. | The TTL of one record at Cloudflare. | The same request with the old TTL. |
 | D3 | Owner | The Porkbun account: remove the DS record of the domain. Only with a DS record. | DNSSEC of the domain ends. | Step D7c: a DS record that fits the keys of the zone. |
+| D3, read | Lead | The DS read of step D3: `dig` to a name server of the parent zone. | Nothing. | Not necessary. |
 | D4 | Owner | The Porkbun account: the name servers of the domain become the default name servers of Porkbun. | The provider that answers for each record of the domain. | Step D7: name servers of Cloudflare again. |
-| D6 | Lead | The block of step D6: `dig` to two public resolvers and to `<porkbun ns>`. | Nothing. | Not necessary. |
+| D6 | Lead | The block of step D6: `dig` to two public resolvers, to a name server of the parent zone and to `<porkbun ns>`. | Nothing. | Not necessary. |
 | D7a | Owner | The Porkbun account: the two name servers of Cloudflare again. Only for a way back. | The provider that answers for each record of the domain. | Step D4 again. |
 | D7b, zone | Owner | The Cloudflare dashboard: a new zone for the apex domain, a new token for it, and each feature of step A8 from the saved values. Only when Cloudflare removed the zone. | A new zone at Cloudflare. No public answer before the name server change. | The removal of the new zone in the dashboard. |
 | D7b, read | Lead | The first block of step D7b: `GET zones/<new zone id>/dns_records?per_page=100&page=<page>`. | Nothing at Cloudflare. | Not necessary. |
 | D7b, records | Lead | The second block of step D7b: `POST zones/<new zone id>/dns_records` for each record of `cloudflare-restore.json`. | New records in the new Cloudflare zone, with the proxy state of the inventory. | The removal of each new record in the dashboard. |
 | D7b, name servers | Owner | The Porkbun account: the name servers of the new Cloudflare zone. | The provider that answers for each record of the domain. | Step D4 again. |
 | D7c | Owner | The Porkbun account: the DS record that fits the keys of the Cloudflare zone. Only when step D3 removed a DS record. | DNSSEC of the domain starts again. | The removal of the DS record. |
+| D7c, reads | Lead | The DS read of step D3 and `dig +dnssec A <name> @1.1.1.1`. | Nothing. | Not necessary. |
 | E1 | Lead | `scripts/aws-host.sh dns --plan`. It can run before step A6. | Nothing. It reads the stack through AWS. | Not necessary. |
 | E2 | Lead | `scripts/aws-host.sh dns`. | It makes or corrects a host record at Porkbun. The expected result is no change. | The old content of the record by hand. The command deletes no record. |
 | E3 | Lead | The block of step E3: `host-bootstrap.sh` in the Systems Manager session. | It can write the environment file and start services again. | The [host boot page](host-boot.md) gives the behavior of a repeat. |

@@ -21,7 +21,7 @@ The service uses the LiteLLM kit image from the lock and the models in `litellm/
 | `EC2_PI_DURABLE_THINKING` | `xhigh` | Stays `xhigh`. |
 
 The gateway must not lower Luna's reasoning effort or set `drop_params`.
-A virtual key allows only the selected active model routes that its service needs.
+A virtual key allows each active route of its kind, not only the selected one: the agent key each Luna route, the OpenViking key each embedding and Luna route.
 
 Warning: changing an embedding model or vector size can make existing memory vectors incompatible. Plan a rebuild before changing populated memory.
 

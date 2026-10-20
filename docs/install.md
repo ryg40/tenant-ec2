@@ -18,7 +18,7 @@ Not verified: a complete live core install. The [reference pages](../README.md#p
 | Entra tenant | You can create an application registration and a security group, configure group claims and grant required consent. |
 | Domain name | You can set A records. The core uses HTTP-01 or TLS-ALPN-01 and needs no DNS provider key. |
 | Development machine | A POSIX shell, Git, Python 3, AWS CLI version 2, `curl`, OpenSSH, OpenSSL and `envsubst` from gettext. |
-| Static checks | Docker with Compose, `cfn-lint` and `shellcheck` 0.10.0 or later. See [fallback tools](reference/checks.md#hooks-and-fallback-tools). |
+| Static checks | Docker with Compose, `cfn-lint`, `shellcheck` 0.10.0 or later and the Python module `yaml` (PyYAML). See [fallback tools](reference/checks.md#hooks-and-fallback-tools). |
 | Entra automation | Azure CLI if you use `scripts/entra-app.sh`; the [Entra page](entra.md) also describes the registration requirements. |
 | Portable snapshot | An approved clone URL, tag and exact commit. Every required kit needs a complete pin in `kits.lock`. |
 | Credential storage | A secure local store for new values. The core does not require Bitwarden or Vault. |
@@ -310,7 +310,7 @@ Warning: `--replace-instance` loses root-volume files. `--allow-remove` can sepa
 ## 7. Wait for boot and verify
 
 User data checks the portable snapshot commit before it starts any kit script.
-The bootstrap mounts storage, builds pinned kits, starts services and makes service keys.
+`scripts/host-userdata.sh` mounts the storage. The bootstrap builds pinned kits, starts services and makes service keys.
 Certificate issuance may need a bootstrap repeat after DNS becomes visible.
 
 1. Open a Systems Manager session to the instance shown in the stack outputs. This gives a host shell without copying the provisioner key.
@@ -332,7 +332,7 @@ sudo sh /opt/tenant-ec2/scripts/host-bootstrap.sh
 scripts/aws-host.sh verify
 ```
 
-5. Preserve the generated service keys through the [credential procedure](credentials.md). The bootstrap does not write them back to Secrets Manager.
+5. Preserve the generated service keys through the [credential procedure](credentials.md). The bootstrap writes changed keys to `<Project>/generated` only; a failed write warns and keeps the host file.
 6. Record the built image ids from the host lock in your controlled lock record. They identify the builds used by this install.
 
 Not verified: the checks of `verify` pass on a host.

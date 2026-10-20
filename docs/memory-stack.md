@@ -1,6 +1,33 @@
 # Shared memory stacks
 
-[Architecture](architecture.md) | [Checks](reference/checks.md) | [Glossary](../GLOSSARY.md)
+[Architecture](architecture.md) | [Memory view](aws-memory.html) | [Checks](reference/checks.md) | [Glossary](../GLOSSARY.md)
+
+## Use the memory from your terminal
+
+![Shared memory from your terminal](diagrams/aws-memory.svg)
+
+Open [the interactive memory view](aws-memory.html) in a browser for its notes, or the [step view](memory-terminal.html) for each step.
+The memory client is part of the tenant-pi kit: Pi with its AgentCore extension, or Claude Code with its AgentCore plugin.
+
+Do these steps one time, after the administrator adds you to a stage:
+
+1. Open the Bitwarden Send from the administrator. It holds your key and your client config. The Send password comes through another channel.
+2. Store the key in `~/.aws/credentials` under the profile name of the config, `tenant-ec2-memory-<stage>-person-<actorId>`. Keep the file private, with mode `0600`.
+3. Save the config file. Claude Code reads `~/.config/agentcore-memory/config.json` by default. For Pi, name the file in `memory.agentcore.configFile` of the private overlay, and set both consent keys `consent.memoryCapture` and `consent.remoteMemoryWrites`.
+4. Set `AGENTCORE_PROJECT` to your project. The config names no Git remote or folder, so the client cannot find the project by itself.
+
+Each day:
+
+- Start Pi with the AgentCore extension, or Claude Code with `claude --plugin-dir packages/agentcore-claude` in the tenant-pi kit.
+- Type a prompt. Before the model answers, the client recalls records from `/shared/`, `/actor/<actorId>/` and `/project/<projectId>/shared/`.
+- Ask the agent to remember a fact. It proposes the fact into `/project/<projectId>/proposals/<actorId>/` only after you confirm.
+- A maintainer of the project runs `agentcore-memory proposals approve` or `reject` for the proposal. An approved fact moves to `/project/<projectId>/shared/`, and each member then recalls it.
+- Copy a file with `aws s3 cp <file> s3://<bucket>/users/<actorId>/ --profile <profile>`, or into `projects/<projectId>/` of a project of yours.
+- Set `AGENTCORE_MEMORY_DISABLE=1` to stop each memory call of the client.
+
+The rules refuse the records and the files of another person, a project of which you are no member, your own write into project shared, and each delete of a memory record.
+The config parser of the tenant-pi core accepts each field of the client config. An offline run of that parser accepted the dev output for two example people.
+Not verified: the tenant-pi client against a deployed stage of this design.
 
 ## Purpose
 
@@ -16,14 +43,20 @@ IAM is AWS Identity and Access Management; it checks the permissions of each cal
 An administrator deploys each stack beside the bootstrap stack.
 The memory stack grants no AgentCore rights to the provisioner.
 
-Not verified: a live deploy of a memory stack or its effective AWS permissions.
-The first live deploy needs separate approval and the owner's administrator login with multi-factor authentication (MFA).
+A deploy of the dev stage created each resource of its template.
+Live access tests with the keys of the dev users passed.
+[What the dev stage proved](#what-the-dev-stage-proved) lists each fact and each open limit.
+Not verified: a deploy of the test or prod stage.
+Each deploy needs separate approval and the owner's administrator login with multi-factor authentication (MFA).
+A deploy has two steps, and each step needs its own owner word: the explicit approval of the deployment owner.
 Do not use the root login for deployment.
 
 ## What the stack deploys
 
 `Project` defaults to `tenant-ec2`.
-`Stage` is `dev`, `test` or `prod`; the selected stage file supplies the region, default `us-east-1`.
+`Stage` is `dev`, `test` or `prod`.
+The stage file names the region of the stage; each example stage file uses `us-east-1`.
+The deploy helper uses `EC2_AWS_REGION`, default `us-east-1`, not the stage file. Keep both values equal.
 The administrator role parameter, `AdministratorRole`, defaults to `Administrator`.
 The optional `AdministratorUser` parameter defaults to empty and names a console administrator IAM user.
 Both parameters accept one IAM name without a path or wildcard.
@@ -41,8 +74,14 @@ An ARN is an Amazon Resource Name, AWS's identifier for one resource or identity
 | Worker user and its managed policy | `${Project}-memory-${Stage}-worker` | Reads global and project shared records, and all project files. |
 | Memory resource policy | Not emitted for Memory | The CloudFormation resource policy type currently supports Runtime and Gateway only. |
 
-The memory has `Project` and `Stage` tags.
-Person tags hold `purpose=agentcore-memory`, `actorId`, `pin` and `stage`.
+The memory and the bucket have `Project` and `Stage` tags.
+Person tags hold `purpose=agentcore-memory`, `actorId`, `pin` and `Stage`.
+Service user tags hold `Project`, `Stage` and `purpose=agentcore-memory`.
+The deploy helper also gives the stack the tags `Project` and `Stage`.
+CloudFormation copies each stack tag to each resource that takes tags.
+IAM treats two tag keys that differ only in case as one key, so such a pair fails the create of an IAM user.
+Thus each resource tag key keeps the case of the stack tag key: a person user carries `Stage`, not `stage`.
+A dev create with the person tag key `stage` failed on this rule and rolled back.
 Users have no login profile, group or CloudFormation access-key resource.
 No memory execution role, custom encryption key or `MemoryStrategies` appears in this design.
 
@@ -52,8 +91,9 @@ Lifecycle rules expire noncurrent versions after 30 days and abort incomplete mu
 The design retains the host bucket's `BucketKeyEnabled` setting.
 S3 Bucket Keys reduce SSE-KMS costs; that setting supplies no additional SSE-S3 protection.
 
-The memory and bucket use `DeletionPolicy: RetainExceptOnCreate` and `UpdateReplacePolicy: Retain`.
-An initial creation rollback removes them; later stack deletion or replacement retains their data.
+The memory, the bucket and the bucket policy use `DeletionPolicy: RetainExceptOnCreate` and `UpdateReplacePolicy: Retain`.
+An initial creation rollback removes them; later stack deletion or replacement retains them and their data.
+The rollback of a failed dev create removed the memory and the bucket.
 Retention does not make a backup or stop S3 lifecycle expiration.
 A retained resource remains billable and needs separate management after its stack stops owning it.
 
@@ -136,7 +176,9 @@ A maintainer promotes a proposal by moving it, not by creating a new shared reco
 A person can write private S3 files but cannot create private AgentCore records; the submit identity handles those records.
 Only the administrator deletes the global `/shared/` and private `/actor/` memory trees.
 People can delete their own user files without receiving memory delete permission.
-The table defines intended access, not evidence of a successful live authorization test.
+The table defines the intended access.
+Live tests on the dev stage passed for the cases in [What the dev stage proved](#what-the-dev-stage-proved).
+These cases do not cover each cell of the table; for example, no case used a deleter.
 
 ## The rule
 
@@ -176,7 +218,7 @@ Do not remove namespace restrictions to reduce a policy's size.
 ### The bucket deny rule
 
 `DenyOutsiders` denies `s3:*` on the bucket and its objects with `Principal: "*"`.
-Its `ArnNotLike` condition tests `aws:PrincipalArn` against the active people, enabled service users and administrator exceptions.
+Its `ArnNotLike` condition tests `aws:PrincipalArn` against the active people, enabled service users, an admitted host role and administrator exceptions.
 The administrator exceptions are these template expressions, not stored account values:
 
 ```text
@@ -187,7 +229,7 @@ arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${AdministratorUser}
 
 The user ARN appears only when `AdministratorUser` is not empty.
 The `HasAdministratorUser` condition omits it with `AWS::NoValue` otherwise.
-Set `EC2_MEMORY_ADMINISTRATOR_USER` to the reviewed IAM user name before previewing or applying with the deploy helper.
+Set `EC2_MEMORY_ADMINISTRATOR_USER` to the reviewed IAM user name before the preview and both deploy steps.
 The helper passes an empty value when unset; this removes that exception during an update.
 Use an MFA administrator session; this exception neither grants permissions nor enforces MFA.
 Enforce MFA separately in the administrator's IAM policies.
@@ -210,8 +252,10 @@ An optional Mac host admission uses a separate role and boundary, described belo
 An administrator must check other account policies before relying on that restriction.
 The stack cannot stop an administrator from granting another identity access later.
 
+Live tests on the dev stage refused each tested request outside the namespaces of the caller.
+They also refused a read of another memory of the account.
 Not verified: a resource policy on a memory.
-Not verified: the account-wide identity set or live cross-stage and cross-namespace denials.
+Not verified: the account-wide identity set, or a cross-stage denial against a deployed test or prod stage.
 
 ## Optional Mac host admission
 
@@ -245,7 +289,8 @@ Standard input is the process input stream, not a command-line argument.
 
 `<USER>` is `PERSON_<ACTORID>`, `SUBMIT` or `WORKER`, in capitals with hyphens replaced by underscores.
 The helper creates one key only for a user that has none.
-The read-only `check --stage <s>` reports each user whose key count is not one.
+It refuses the whole run before any creation when a user has more than one key; finish that rotation first.
+The read-only `check --stage <s>` prints one line for each user and fails when a key count is not one.
 `rotate --user <name>` creates a second key after explicit apply and prints the old key's deletion command.
 The operator verifies the replacement before deleting the old key; IAM permits at most two keys per user.
 
@@ -255,7 +300,11 @@ The person stores the key under the profile named by the client configuration, i
 The configuration names the profile; it holds no key.
 Remove the Send after hand-over and rotate the key if someone else opens it.
 
-Not verified: key creation, rotation, credential sync or a complete Bitwarden Send hand-over for these stacks.
+On the dev stage, `keys --apply` created one key for each user and saved each pair with credential sync.
+`check` then gave one key for each user.
+Each saved key answered `sts get-caller-identity` with its own user.
+Not verified: a direct read of the saved Bitwarden items; the proof is the confirmed write of the sync command.
+Not verified: key rotation or a complete Bitwarden Send hand-over for these stacks.
 
 ## Delete
 
@@ -272,6 +321,7 @@ The inherited tenant-pi design grants people no delete action because of this ga
 Keep `deleters: []` until the coordinator resolves that difference and an approved test proves the intended restriction.
 Never remove the `Null` requirement or grant an unconditioned delete to make the request succeed.
 
+With `deleters: []`, the live tests on the dev stage refused both record-delete cases.
 Not verified: project-scoped AgentCore deletion or refusal of a delete outside that project.
 
 Warning: record deletion can remove shared knowledge permanently. Retaining the memory resource does not recover deleted records.
@@ -298,44 +348,56 @@ The command interface is the design contract; the template reference describes t
    scripts/check.sh
    ```
 
-4. Preview the deployment command. This step does not authorize a cloud write.
+4. Preview the deployment command. This step does not authorize a cloud write and needs no owner word.
 
    ```sh
    scripts/aws-memory.sh deploy --stage dev --dry-run
    ```
 
-5. After approval, deploy with the MFA administrator profile and explicit apply. The stack command acknowledges named IAM resources with `CAPABILITY_NAMED_IAM`.
+5. Prepare the change set with the MFA administrator profile. A change set is the list of resource changes that CloudFormation proposes. Owner word for this step: the owner approves the creation of a change set for this stage. The change set command acknowledges named IAM resources with `CAPABILITY_NAMED_IAM`.
 
    ```sh
-   scripts/aws-memory.sh deploy --stage dev --profile tenant-ec2-admin --apply
+   scripts/aws-memory.sh deploy --stage dev --prepare --profile tenant-ec2-admin
    ```
 
-6. Write the stack outputs to the ignored local file. Keep memory identifiers and account values out of tracked files.
+   The step creates the change set, waits for it and prints its name, its status and its resource changes. Then it stops. Nothing executes, and no stack resource changes.
+
+6. Execute the reviewed change set by its name. Owner word for this step: the owner reads the printed resource changes and approves the execution of that change set.
+
+   ```sh
+   scripts/aws-memory.sh deploy --stage dev --execute <change-set-name> --profile tenant-ec2-admin
+   ```
+
+   The step checks that the change set belongs to the stack of this stage, is ready and carries the same administrator settings. Then it executes that change set and prints a read-only status command. Keep the shell settings of step 5. `deploy --apply` refuses and names the two steps.
+
+   The step returns when the execution starts. Its exit code 0 does not prove a complete stack. Run the status command until the stack reaches `CREATE_COMPLETE` or `UPDATE_COMPLETE`. A failed create rolls back; the [template reference](reference/memory-template.md#commands) gives the clean-up before a new prepare step.
+
+7. Write the stack outputs to the ignored local file. Keep memory identifiers and account values out of tracked files.
 
    ```sh
    scripts/aws-memory.sh outputs --stage dev --write
    ```
 
-7. Preview missing keys. Review the user names before the administrator applies key creation.
+8. Preview missing keys. Review the user names before the administrator applies key creation.
 
    ```sh
    scripts/aws-memory.sh keys --stage dev
    ```
 
-8. After approval, create missing keys with credential sync. No key value belongs in the terminal output.
+9. After approval, create missing keys with credential sync. No key value belongs in the terminal output.
 
    ```sh
    scripts/aws-memory.sh keys --stage dev --profile tenant-ec2-admin --apply
    ```
 
-9. Generate the person's client configuration privately. Read the memory identifier from `.local/memory/dev.json`, not from a tracked example.
+10. Generate the person's client configuration privately. Read the memory identifier from `.local/memory/dev.json`, not from a tracked example.
 
-   ```sh
-   python3 scripts/aws-memory.py client-config --stage dev --actor alice --memory-id <memory-id>
-   ```
+    ```sh
+    python3 scripts/aws-memory.py client-config --stage dev --actor alice --memory-id <memory-id>
+    ```
 
-10. Complete the private hand-over described in Keys. The person uses the configuration's stage profile.
-11. Run the read-only key check. Every expected user should have one key.
+11. Complete the private hand-over described in Keys. The person uses the configuration's stage profile.
+12. Run the read-only key check. Every expected user should have one key.
 
     ```sh
     scripts/aws-memory.sh check --stage dev
@@ -350,13 +412,51 @@ Do not paste private outputs or client configuration into a ticket or commit.
 
 Warning: deployment creates billed resources and IAM identities. These examples do not authorize a deployment or key creation.
 
+## What the dev stage proved
+
+The facts below come from one deploy of the dev stage, its key issuance and its live access tests.
+They prove the dev stage only.
+
+- The prepare step made one change set. The execute step ran only that change set.
+- The first execute failed on the person tag key `stage` beside the stack tag `Stage`. Its rollback removed each created resource, the memory and the bucket included.
+- The template with the person tag key `Stage` then created each of the 12 resources of the dev template.
+- The memory is active, with a 7-day event expiry and no strategy.
+- The bucket has all four public access blocks, SSE-S3 encryption with the bucket key, versioning and both lifecycle rules.
+- The live bucket policy, the boundary, the managed policies and the person inline policies equal the resolved template.
+- No identity policy allows an unscoped `GetMemoryRecord`.
+- No user has a group, a login profile or an extra policy. Each user has each tag key once.
+- `keys --apply` created one key for each of the six users and saved each pair with credential sync.
+- `check` then gave one key for each user. Each key answered `sts get-caller-identity` with its own user.
+- A semantic retrieve returned a record from the memory with no strategy.
+- The record list showed a new record within seconds. It dropped a deleted record within about one minute.
+
+Each identity in the access tests used only its own key.
+49 of 49 cases passed.
+
+| Group | Cases | What the cases prove |
+| --- | --- | --- |
+| Writes | 10 | The submit user writes `/actor/<a>/` and `/shared/`. A person writes only the own proposals of an own project. Refused: a person write into project shared, into the own actor namespace, or into the proposals of another person or another project; a request with one allowed and one refused namespace; each worker write; a submit write into project shared. |
+| Reads | 10 | A maintainer reads all proposals of the own project. A member reads the project shared namespace. Refused: another actor namespace, a project of which the person is no member, the proposals of another person for a member that is no maintainer, a worker read outside shared, a retrieve outside the scope, and a read of another memory of the account. |
+| Moves | 4 | Only the maintainer of the project moves a proposal into project shared. The moved record has only the shared namespace. Refused: a member, the maintainer of another project, and the proposer. |
+| Record deletes | 2 | No stage identity deletes a record. |
+| Bucket | 18 | A person reads and writes `users/<a>/` and the folders of the own projects, and deletes only in `users/<a>/`. Refused: the folder of another person, a project of which the person is no member, a delete in a project folder, and a list with no prefix. The worker reads project folders only and writes nothing. The submit user writes and cannot delete. |
+| Visibility | 5 | Each allowed reader lists a new record. The record of an approved proposal reaches the members and the worker. |
+
+Not verified: the TLS denial of the bucket policy with a live request. The live bucket policy equals the template.
+Not verified: the `DenyOutsiders` statement alone. A test needs an outside identity with S3 rights.
+Not verified: a deployed test or prod stage, and thus a cross-stage denial. The cross-memory case proves only that a dev user cannot read another memory of the account.
+Not verified: the account-wide exclusivity of the memory permissions.
+Not verified: a project purge, offboarding or key rotation.
+Not verified: `client-config` and the Bitwarden Send hand-over.
+Not verified: the tenant-pi client against a stage of this design.
+
 ## Out of scope
 
 - The homelab host role receives no AgentCore memory permission; the separate Mac admission does not widen it.
 - The existing hand-made memory and `pi-memory-person-*` users stay unchanged; record migration needs a separate change.
 - Tenant-pi client changes belong in tenant-pi, including checks for the new user prefix and stage profile names.
 - No extraction strategy, memory execution role or custom encryption key is added.
-- No diagram rebuild or automatic link between the bucket and AgentCore records is part of this design.
+- No automatic link between the bucket and AgentCore records is part of this design.
 
 ## Decisions and AWS sources
 

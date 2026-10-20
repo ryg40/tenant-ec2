@@ -7,12 +7,16 @@ The Linux steps on this page apply to `homelab` only; the Mac path is described 
 ## Mac bootstrap
 
 Mac user data uses `ec2-macos-init`, not Linux cloud-init or systemd.
-It clones the same pinned portable snapshot, writes the protected deployment machine document and fetches private service JSON.
+It writes the protected deployment machine document and the root-owned first-boot stage, then runs the stage.
+The stage fetches private service JSON, clones the same pinned portable snapshot and calls the bootstrap.
+The first boot stops on the empty environment secret. `scripts/aws-host.sh host-bootstrap --apply` replays the same stage after `secret --apply`; see [First-boot replay](../variants.md#first-boot-replay).
 `scripts/host-bootstrap-macos.sh` is a zsh entrypoint. Never parse it with Bash shellcheck or invoke it through `sh`.
 Its forms mode checks machine data against the stage person and host admission before accepting separate service settings.
 
 The native path verifies the EBS volume identity before APFS formatting or mounting at `/Volumes/data`.
-It creates and reads back the PIN account before disabling default interactive accounts.
+It creates and reads back the PIN account, then stops with `lockdown pending`. The default accounts stay unchanged.
+After the operator proves the PIN login, `host-bootstrap --apply --lockdown` disables the default interactive accounts once and continues.
+See [Recovery check before the lockdown](../variants.md#recovery-check-before-the-lockdown).
 The generated initial password stays in `<Project>/macos/generated`; the owner changes it at first login.
 It installs pinned tools, initializes the explicitly mounted PIN-owned Podman machine and builds selected kit tags without source patches.
 A Linux guest holds named application volumes. No developer home, personal credentials directory or engine socket enters application mounts.
@@ -232,7 +236,9 @@ Warning: a service log can hold a secret, for example the first setup token of P
 ## Kit builds
 
 An incomplete tag or commit in `kits.lock` prevents that kit from cloning, building or starting.
-Other selected services can still start; this is not a complete core install.
+Without the gateway or OpenViking kit, step 7 stops: the stack cannot start without them.
+Without the agent kit, the other selected services still start; this is not a complete core install.
+Not verified: the start of the gate without the OpenKnowledge kit.
 The lock pins the basic pi-durable kit at `portable-v0.1.0`, so the bootstrap includes its service.
 
 A private kit source needs a read-only `EC2_KIT_TOKEN_<KIT>` in the host secret.

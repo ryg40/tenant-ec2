@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The homelab core on AWS",
+    "output": "aws-core.html",
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "cloud": {
+          "label": "Compute: the instance and its containers"
+        },
+        "backend": {
+          "label": "Storage"
+        },
+        "security": {
+          "label": "Identity and secrets"
+        },
+        "frontend": {
+          "label": "AI models"
+        },
+        "messagebus": {
+          "label": "Network"
+        },
+        "external": {
+          "label": "Outside AWS"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "dns_domain",
+      "type": "external",
+      "label": "DNS provider",
+      "sublabel": "A record for ok.<domain>",
+      "pos": [
+        309,
+        30
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "idp_entra",
+      "type": "external",
+      "label": "Microsoft Entra ID",
+      "sublabel": "sign-in and group rule",
+      "pos": [
+        690,
+        30
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "web_you",
+      "type": "external",
+      "label": "You, in a browser",
+      "sublabel": "https://ok.<domain>",
+      "pos": [
+        30,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "eip_public",
+      "type": "messagebus",
+      "label": "Elastic IP",
+      "sublabel": "the public address",
+      "pos": [
+        296,
+        330
+      ],
+      "size": [
+        176,
+        84
+      ]
+    },
+    {
+      "id": "edge_caddy",
+      "type": "messagebus",
+      "label": "Caddy edge",
+      "sublabel": "TLS on 80 and 443",
+      "pos": [
+        510,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "gate_okauth",
+      "type": "security",
+      "label": "Entra gate",
+      "sublabel": "ok-auth",
+      "pos": [
+        690,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_ok",
+      "type": "cloud",
+      "label": "OpenKnowledge",
+      "sublabel": "your knowledge pages",
+      "pos": [
+        870,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_agent",
+      "type": "cloud",
+      "label": "pi-durable agent",
+      "sublabel": "basic agent",
+      "pos": [
+        510,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_ov",
+      "type": "cloud",
+      "label": "OpenViking",
+      "sublabel": "agent memory",
+      "pos": [
+        690,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "svc_llm",
+      "type": "cloud",
+      "label": "LiteLLM gateway",
+      "sublabel": "model routes, Postgres",
+      "pos": [
+        870,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "ebs_data",
+      "type": "backend",
+      "label": "Amazon EBS",
+      "sublabel": "encrypted data volume",
+      "pos": [
+        690,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "host_ec2",
+      "type": "cloud",
+      "label": "Amazon EC2",
+      "sublabel": "Amazon Linux, Docker",
+      "pos": [
+        870,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "efs_files",
+      "type": "backend",
+      "label": "Amazon EFS",
+      "sublabel": "pages, memory, shared",
+      "pos": [
+        1160,
+        330
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "bedrock_models",
+      "type": "frontend",
+      "label": "Amazon Bedrock",
+      "sublabel": "Luna and embeddings",
+      "pos": [
+        1160,
+        490
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "sm_secret",
+      "type": "security",
+      "label": "Secrets Manager",
+      "sublabel": "stack secret",
+      "pos": [
+        1160,
+        650
+      ],
+      "size": [
+        150,
+        84
+      ]
+    },
+    {
+      "id": "admin_ops",
+      "type": "external",
+      "label": "Administrator",
+      "sublabel": "terminal, MFA login",
+      "pos": [
+        870,
+        860
+      ],
+      "size": [
+        150,
+        84
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "AWS Cloud",
+      "wraps": [
+        "eip_public",
+        "edge_caddy",
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_ov",
+        "svc_llm",
+        "ebs_data",
+        "host_ec2",
+        "efs_files",
+        "bedrock_models",
+        "sm_secret"
+      ],
+      "pad": 64
+    },
+    {
+      "kind": "region",
+      "label": "VPC",
+      "wraps": [
+        "eip_public",
+        "edge_caddy",
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_ov",
+        "svc_llm",
+        "ebs_data",
+        "host_ec2"
+      ],
+      "pad": 42
+    },
+    {
+      "kind": "region",
+      "label": "Public subnet",
+      "wraps": [
+        "eip_public",
+        "edge_caddy",
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_ov",
+        "svc_llm",
+        "ebs_data",
+        "host_ec2"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "EC2 instance: ports 80 and 443 open",
+      "wraps": [
+        "edge_caddy",
+        "gate_okauth",
+        "svc_ok",
+        "svc_agent",
+        "svc_ov",
+        "svc_llm",
+        "ebs_data",
+        "host_ec2"
+      ],
+      "pad": 10
+    }
+  ],
+  "connections": [
+    {
+      "from": "web_you",
+      "to": "eip_public",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "eip_public",
+      "to": "edge_caddy",
+      "variant": "emphasis"
+    },
+    {
+      "from": "edge_caddy",
+      "to": "gate_okauth",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gate_okauth",
+      "to": "svc_ok",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "gate_okauth",
+      "to": "idp_entra",
+      "label": "sign-in",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        765,
+        190
+      ]
+    },
+    {
+      "from": "dns_domain",
+      "to": "eip_public",
+      "label": "A record",
+      "variant": "dashed",
+      "labelAt": [
+        384,
+        190
+      ]
+    },
+    {
+      "from": "svc_ok",
+      "to": "efs_files",
+      "label": "files"
+    },
+    {
+      "from": "svc_llm",
+      "to": "bedrock_models",
+      "label": "models"
+    },
+    {
+      "from": "host_ec2",
+      "to": "sm_secret",
+      "label": "read at boot"
+    },
+    {
+      "from": "admin_ops",
+      "to": "host_ec2",
+      "label": "SSH or SSM session",
+      "variant": "security",
+      "labelAt": [
+        945,
+        805
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "What costs money",
+      "items": [
+        "The EC2 instance, for each hour that it runs",
+        "The EBS volume and the EFS files, for the stored size",
+        "The public IPv4 address of the Elastic IP, for each hour",
+        "Bedrock, for each model request through LiteLLM",
+        "The Secrets Manager secret, for each month",
+        "Options: the S3 bucket, daily snapshots, host logs and a billing alarm"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "What is public",
+      "items": [
+        "Only ok.<domain>, on ports 80 and 443, by default",
+        "OpenKnowledge asks for a Microsoft Entra sign-in and the group rule",
+        "SSH answers only the AdminCidr address range"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Where your data lives",
+      "items": [
+        "EBS: the local databases, Postgres of LiteLLM included",
+        "EFS: the OpenKnowledge pages, the OpenViking data and the shared files",
+        "Options: daily EBS snapshots and a private, encrypted S3 bucket"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Sign-ins and keys",
+      "items": [
+        "You sign in to OpenKnowledge with Microsoft Entra ID",
+        "The instance role gives the host its AWS access, so no AWS key is on the host",
+        "The provisioner key stays on the administrator machine",
+        "The host reads the stack secret at boot"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Not verified",
+      "items": [
+        "A complete live install of this core with its Entra sign-in"
+      ]
+    }
+  ]
+}

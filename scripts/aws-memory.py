@@ -432,7 +432,7 @@ def template(config, check_policies=True):
             "UserName": user_name("person-" + actor), "PermissionsBoundary": ref("Boundary"),
             "Policies": [{"PolicyName": "agentcore-memory", "PolicyDocument": policy}],
             "Tags": [{"Key": "purpose", "Value": "agentcore-memory"}, {"Key": "actorId", "Value": actor},
-                     {"Key": "pin", "Value": person["pin"]}, {"Key": "stage", "Value": ref("Stage")} ]}}
+                     {"Key": "pin", "Value": person["pin"]}, {"Key": "Stage", "Value": ref("Stage")}]}}
         people.append(ref(logical_id))
         principals.append(att(logical_id, "Arn"))
     outputs = {"MemoryId": {"Description": "The identifier of the memory.", "Value": att("Memory", "MemoryId")},

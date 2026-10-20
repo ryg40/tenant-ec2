@@ -119,7 +119,7 @@ It formats the data volume only when both `blkid` and `wipefs -n` find no signat
 It starts the [bootstrap](host-boot.md) when the portable snapshot contains it.
 
 A private portable snapshot needs a read-only clone credential in `EC2_SNAPSHOT_CLONE_TOKEN` of the secret `tenant-ec2/env`.
-A Git credential helper reads it through the instance role and supplies it with `GIT_ASKPASS`.
+A `GIT_ASKPASS` program reads it through the instance role; the clone turns Git credential helpers off.
 The credential is not in user data, a parameter, a URL or a log line.
 Git asks for no credential for a public source.
 See [private sources](../options/home-lab.md) for this option.

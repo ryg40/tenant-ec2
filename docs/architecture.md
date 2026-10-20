@@ -1,11 +1,54 @@
 # Architecture
 
-The diagrams show the homelab portable core and its options, not a deployed host.
-The [Mac variant](variants.md) is not drawn in these five diagrams.
-It separates Dedicated Host allocation from the runtime stack and uses encrypted EBS instead of EFS.
-A PIN-owned Podman Linux guest runs four services; only the Entra gate publishes loopback port 4180 through an operator tunnel.
-A temporary instance-role credential bridge replaces Linux metadata delivery inside containers.
-Stage host admission supplies memory scope, but pi-durable stays disabled until the compatible AgentCore kit release and shared pin exist.
+Start with the three AWS views.
+Each view is one HTML file. Open it in a browser from the file system.
+The views look like the usual AWS architecture diagrams: AWS frames, a coloured tile for each resource, and short notes on cost, access and data.
+
+| View | It answers |
+| --- | --- |
+| [The homelab core on AWS](aws-core.html) | What you open, what runs on the instance, where your data lives, what is public and what costs money. |
+| [Shared memory from your terminal](aws-memory.html) | What a person gets one time, what the person types each day, what a maintainer approves and what the rules refuse. |
+| [The Mac variant on AWS](aws-mac.html) | How the operator reaches the Mac through a tunnel, what runs in the Podman machine and what the Dedicated Host costs. |
+
+![The homelab core on AWS](diagrams/aws-core.svg)
+
+The [step view](memory-terminal.html) follows one person on the dev stage, from the key hand-over to offboarding.
+Each step names its command, its AWS call and its namespace or bucket prefix.
+Each step has the tag `dev: proven` or `not verified`.
+
+## Read a view
+
+| Tile colour | AWS category | Examples in the views |
+| --- | --- | --- |
+| Orange | Compute | The EC2 instance, the Mac instance and the containers |
+| Green | Storage | EBS, EFS and the stage bucket |
+| Red | Identity and secrets | The Entra gate, an IAM user, a key file and Secrets Manager |
+| Teal | AI | Amazon Bedrock and AgentCore Memory |
+| Purple | Network and access | The Elastic IP, the Caddy edge and Systems Manager |
+| Gray | Outside AWS | People, their computers, Microsoft Entra ID and the DNS provider |
+
+| Frame | Meaning |
+| --- | --- |
+| AWS Cloud, dark border | The AWS account of the install. |
+| VPC, purple border | The private network of one host. |
+| Public subnet, green fill | The subnet with a route to the internet. |
+| EC2 instance or Dedicated Host, orange border | One machine and what runs on it. |
+| Memory stack or Podman machine, gray dashed border | A group inside one stack or one machine. |
+| Your computer, gray border | The programs and files on the computer of the reader. |
+
+- Click a resource. The view zooms to it, fades the other resources and lists its links.
+- The toolbar also has Route, Lens and a search.
+- The switch at the top selects the light or the dark theme. A view opens in the light theme.
+- Export saves the whole diagram as an image or as an SVG file.
+- A view makes no network request when it opens.
+
+Not verified: the views in a browser other than Chromium.
+
+## Detailed diagrams
+
+The five diagrams below show the homelab portable core and its options in more detail.
+They show the source, not a deployed host.
+The Mac variant is not in the five diagrams. The [Mac view](aws-mac.html) and [Variants](variants.md) describe it.
 Not verified: applehv, the credential bridge, account transition or reboot on the selected Mac AMI.
 Each image has an editable Excalidraw scene and a reviewed JSON source beside it.
 Arrows show requests or dependencies; frames group related parts.
@@ -73,7 +116,8 @@ The [memory stacks](memory-stack.md) are administrator-owned stacks beside the b
 Each `bootstrap-${Project}-memory-${Stage}` stack owns an AgentCore memory, an optional file bucket, a permissions boundary and stage users.
 The stage YAML names the people and project access lists; bucket prefixes follow the memory namespaces.
 These stacks grant no AgentCore permission to the provisioner or host role and do not replace OpenViking.
-The five diagrams show the host core and its options, not these separate memory stacks.
+The five diagrams omit these separate memory stacks.
+The [memory view](aws-memory.html) shows how a person uses one from a terminal, and the [step view](memory-terminal.html) shows each step.
 
 ## Core services
 
@@ -148,6 +192,8 @@ The template and scripts provide the existing infrastructure and boot facts.
 | Entra login | `compose.yaml`, `ok-auth/oauth2-proxy.cfg`, `scripts/entra-app.sh`, `docs/entra.md` |
 | Install flow | `scripts/aws-host.sh`, `scripts/host-userdata.sh`, `scripts/host-bootstrap.sh`, `scripts/verify-deployed.py`, `kits.lock` |
 | Options | The Compose overlays, `pangolin/blueprint.yaml`, `scripts/dns-records.sh`, `.env.example` |
+| AWS views | The sources above, `compose.macos.yaml`, `scripts/aws-host-macos.cfn.yaml`, `config/memory/dev.yaml`, `scripts/aws-memory.py`, [variants](variants.md), [memory stacks](memory-stack.md), [Mac templates](reference/host-template-macos.md), the memory client packages of the tenant-pi kit |
+| Step view | `scripts/aws-memory.sh`, `scripts/aws-memory.py`, `config/memory/dev.yaml`, [memory stacks](memory-stack.md), [memory template](reference/memory-template.md), the memory client packages of the tenant-pi kit |
 
 - Not verified: a live AWS deploy, storage mount, Bedrock call, certificate issue, DNS update or SSM verify run.
 - Not verified: a real Entra login and group check after deployment.
@@ -211,3 +257,127 @@ Browser requests are blocked during these checks.
 For a repeat build without another npm install, `--npm-dir <temporary-npm-directory>` reuses the exact tool versions.
 `--out-dir <directory>` writes a comparison build without replacing the committed outputs.
 The main result remains the editable scene; the SVG is its page image.
+
+## How the AWS views are built
+
+archify, a third-party skill under the MIT license, builds each view from a typed JSON source and checks both.
+`scripts/archify-aws-look.py` then gives each view the look of an AWS diagram.
+The check script runs neither archify nor Node.
+
+| View | Page | Source | archify type |
+| --- | --- | --- | --- |
+| The homelab core on AWS | [aws-core.html](aws-core.html) | [aws-core.architecture.json](diagrams/aws-core.architecture.json) | architecture |
+| Shared memory from your terminal | [aws-memory.html](aws-memory.html) | [aws-memory.architecture.json](diagrams/aws-memory.architecture.json) | architecture |
+| The Mac variant on AWS | [aws-mac.html](aws-mac.html) | [aws-mac.architecture.json](diagrams/aws-mac.architecture.json) | architecture |
+| The step view | [memory-terminal.html](memory-terminal.html) | [memory-terminal.workflow.json](diagrams/memory-terminal.workflow.json) | workflow |
+
+The files [aws-core.svg](diagrams/aws-core.svg), [aws-memory.svg](diagrams/aws-memory.svg) and [aws-mac.svg](diagrams/aws-mac.svg) are the light SVG exports of the three views.
+The README and the pages show them, because a Git host shows an SVG file but not an HTML view.
+
+### The AWS look
+
+The script adds one style block and one script block to each page.
+The archify viewer keeps each function.
+
+- The light theme is the default. A reader can select the dark theme.
+- The canvas has no dot grid, and the text uses a sans-serif font.
+- The archify type of a component gives the colour of its tile and of its legend entry: `cloud` compute, `backend` storage, `database` data, `security` identity and secrets, `frontend` AI, `messagebus` network and access, `external` outside AWS.
+- The prefix of a component id, before the first underscore, gives the glyph of its tile. For example, `ec2_host` gets a chip and `s3_stage` a bucket.
+- The first words of a frame label give the frame style, for example `AWS Cloud`, `VPC` or `Public subnet`.
+- Nested frames get the same spacing at the bottom as at the top. Each frame title moves to the top-left corner of its frame.
+- A workflow view, such as the step view, gets the light default, the canvas, the font and the colours only.
+
+The glyphs are simple line drawings of this project, not the AWS Architecture Icons.
+Check that each page holds the current look:
+
+```sh
+python3 -I scripts/archify-aws-look.py --check docs/aws-core.html docs/aws-memory.html docs/aws-mac.html docs/memory-terminal.html
+python3 -I scripts/archify-aws-look.py --selftest
+```
+
+The check script runs both commands. They need Python 3.10 or later and no other tool, and they make no network call.
+
+### Open a view
+
+Open the HTML file in a browser from the file system.
+Each file holds its viewer code, styles and fonts.
+Its guide panel has a credit link to the archify project; the link opens only on a click.
+
+### Rebuild a view
+
+Edit the JSON source, not the HTML file.
+The build needs Node 18 or later and npm.
+It makes no AWS, Azure, DNS, service or credential-store call.
+
+Warning: the `npx` step downloads and runs third-party code. Run it in a new empty directory outside the checkout.
+
+1. Load the Archify skill in a new empty directory.
+   `ARCHIFY_UPDATE_CHECK_DISABLED=1` turns off the update check of Archify.
+
+   ```sh
+   ARCHIFY_UPDATE_CHECK_DISABLED=1 npx --yes skills@1.7.4 use "https://github.com/tt-a1i/archify" --skill archify > use-output.txt 2>&1
+   ```
+
+   The last lines of `use-output.txt` name the directory of the supporting files.
+   Below, `<archify>` is that directory.
+   Its `skill-release.json` must name the version `3.2.0`; the committed views come from that version.
+   The command loads the current Archify release, so a later release can give other bytes.
+
+2. Build the view in that directory, copy the page back, and give it the AWS look.
+   The source names its output file, so the build writes no file into the checkout.
+
+   ```sh
+   cp <checkout>/docs/diagrams/aws-core.architecture.json .
+   ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs deliver architecture aws-core.architecture.json aws-core.html --json
+   cp aws-core.html <checkout>/docs/aws-core.html
+   python3 -I <checkout>/scripts/archify-aws-look.py apply <checkout>/docs/aws-core.html
+   ```
+
+   The `validation` part of the `deliver` output must report 0 errors.
+   For the step view, run `finalize workflow memory-terminal.workflow.json memory-terminal.html --quality showcase --json`, then the same `apply` step.
+
+3. Open the page in a browser. Select Export, then "SVG · Light", and save the file as `docs/diagrams/aws-core.svg`.
+   Skip this step for the step view; it has no SVG copy.
+
+4. Check a source and a committed page without a rebuild. The commands write no file into the checkout.
+
+   ```sh
+   ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs validate architecture docs/diagrams/aws-core.architecture.json
+   ARCHIFY_UPDATE_CHECK_DISABLED=1 node <archify>/bin/archify.mjs check docs/aws-core.html --json
+   ```
+
+   The `check` output holds `"ok": true`, also for a page with the AWS look.
+
+### Licenses
+
+archify, with the viewer code in each generated page, is under the MIT license.
+The generated pages do not carry its notice, so the notice follows here:
+
+```text
+MIT License
+
+Copyright (c) 2026 tt-a1i (Archify)
+Copyright (c) 2025 Cocoon AI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+Each page also embeds subsets of the JetBrains Mono font under the SIL Open Font License 1.1.
+Its font styles carry the complete license text.
+The views use no brand mark and no explainer chart code of Archify.

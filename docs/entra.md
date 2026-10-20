@@ -120,7 +120,7 @@ The second lock: `scripts/entra-app.sh apply --assign-group` assigns the group t
 
 The local run proves the gate on the development machine. It needs Docker and `python3`. It makes no call to Entra ID, to Azure or to AWS, and it reads no credential.
 
-1. Run `sh ok-auth/local-run.sh`. The last line must be `local run: pass`.
+1. Run `sh ok-auth/local-run.sh`. The last line must start with `local run: pass`.
 2. On a machine with no image of the OpenKnowledge kit, the run uses a stub upstream by itself. `--upstream stub` selects it by hand.
 
 Warning: do not run it on the host of the stack. The edge network of the name `ok` has a fixed range, and the stack of the host uses it.
@@ -133,7 +133,7 @@ The run starts the services `open-knowledge` and `ok-auth` as `compose.yaml` has
 | No session | A request gets the redirect to the login of the one tenant. The paths `/ready` and `/ping` answer 200. A JSON request and the path `/mcp` get 401. |
 | The login request | It has the client id, the redirect URI, the scope `openid profile User.Read`, a PKCE challenge and a nonce. |
 | The cookie | The session cookie and the cookie of the login request are `Secure` and `HttpOnly`, with `SameSite=Lax`, the prefix `__Host-` and no `Domain`. The session ends after 12 hours. |
-| The group | A member passes. A user outside the group and a token with no group claim get 403. |
+| The group | A member passes. A user outside the group and a token with no group claim do not pass: the probe accepts the status 401, 403 or 500 with no session cookie. |
 | The tenant | A token of another tenant does not pass, also with the group id in it. |
 | The token | A token for another application, with a wrong nonce, with a wrong signature, after its end time or with no user name does not pass. |
 | More than 200 groups | A member passes with the groups of the Graph stub, on two pages. A user outside the group does not pass. A refusal of Graph stops the login. |
@@ -141,7 +141,7 @@ The run starts the services `open-knowledge` and `ok-auth` as `compose.yaml` has
 | The edge network | The network `edge-ok` of the run has the range of `trusted_proxy_ips`. Each of the two edge files gives that range, and its members there are the edge and the gate only. |
 | The upstream | With the kit image: OpenKnowledge answers through the gate, gives the editor a `wss://` address, and the WebSocket of the editor opens. With the stub: the upstream gets the host name of the browser and the name of the user, and no token and no forged user header. |
 | The networks | OpenKnowledge is on two internal networks with no route to the internet. A service of another network has no path to it and none to the gate. |
-| The agent | The agent path of section [The path of the agent](#the-path-of-the-agent) works with no login. The service name alone gets 403. |
+| The agent | The agent path of section [The path of the agent](#the-path-of-the-agent) works with no login. With the kit image, the service name alone gets 403. With the stub, the run does not test it and reports a skip for the MCP endpoint. |
 | The log | The test checks that the log contains none of its configured fake credential values. A login log can still contain a user name and a one-time code. |
 
 ## The first login
@@ -168,7 +168,8 @@ Step 3 is the proof of the login. Step 5 is the proof of the group check.
 - Not verified: the route of the gate to Entra ID through `gate-egress` on the host, and the metadata guard for that network.
 - Not verified: the pi-durable agent itself on the agent path. The local run has a probe in its place, with the same URL.
 
-Section [The first login](#the-first-login) proves the first, the third and the fifth item on the host.
+Section [The first login](#the-first-login) proves the first and the fifth item on the host, and the group claim and the consent of the third item.
+The read of the real Microsoft Graph runs only for a user with more than 200 groups; the first login does not prove it.
 
 ## The path of the agent
 

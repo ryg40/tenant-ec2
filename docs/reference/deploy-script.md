@@ -18,7 +18,8 @@ scripts/aws-host.sh --help
 | `outputs` | Prints stack outputs as `NAME=value`. `--write` updates supported output names in the environment file. |
 | `dns` | Prints or sets the selected A records through `scripts/dns-records.sh`. |
 | `dns --plan` | Reads the Elastic IP from the stack and prints the record set. It changes nothing and calls no provider. |
-| `verify` | Shows stack status, then runs `docker compose ps`, the file set check, the service list and `scripts/verify-deployed.py` on the host through SSM. No model request runs. |
+| `generated-status` | Prints the three generated key names of `<Project>/generated` with `present` or `absent`, never a value. |
+| `verify` | Checks the generated key names first, then shows stack status, then runs `docker compose ps`, the file set check, the service list and `scripts/verify-deployed.py` on the host through SSM. No model request runs. |
 
 ## Mac dispatch
 
@@ -28,8 +29,8 @@ Mac uses `<Project>-macos-allocation` and `<Project>-macos-host`, with private s
 Its secrets are `<Project>/macos/env` and `<Project>/macos/generated`, not the homelab namespace.
 Account, disk and memory scope come from the stack-written machine document, never the service secret.
 
-Mac adds `host-allocate`, `host-release`, `stop`, `start`, `session`, `tunnel` and `ssh`.
-Live lifecycle, secret, deployment and access commands require `--apply`; dry runs make no AWS call or mutation.
+Mac adds `host-allocate`, `host-release`, `stop`, `start`, `session`, `tunnel`, `ssh`, `host-bootstrap` and `recovery-check`.
+Live lifecycle, secret, deployment, access and replay commands require `--apply`; dry runs make no AWS call or mutation.
 `outputs --write` saves private output values. Ordinary output reports names, not values.
 `dns` is refused for Mac, including its plan and dry-run forms.
 The optional Mac boundary and session role must match the admitted memory scope before deployment or access.
@@ -42,6 +43,20 @@ The verifier supplies the bootstrap's isolated Podman environment, runtime Compo
 It checks the four selected services; the dormant agent is not a successful fifth-service check.
 It requires the exact `COMPOSE_FILE` and matching runtime copy and makes no model or memory request.
 The wrapper withholds remote output; approved host-side use prints only fixed check labels.
+
+`host-bootstrap --apply` replays the first-boot stage after `secret --apply`. See [First-boot replay](../variants.md#first-boot-replay).
+It runs the scope checks of `session` and needs the running stack instance online in Systems Manager.
+It reads `<Project>/macos/env` and refuses an empty secret or a secret that fails the bootstrap service forms. It prints the form code, never a value.
+It sends the tracked payload `scripts/macos-first-boot-replay.sh` with `AWS-RunShellScript` to that one instance, after two lines: `MACOS_PROJECT=<project>` and `MACOS_PHASE=first-boot`.
+It polls the command invocation for at most 190 minutes and prints only static status lines of the stage and the bootstrap.
+A status other than `Success` fails the command with the status name.
+Without `--lockdown`, the first phase stops after the PIN account readback. The command then prints `first phase complete; lockdown pending` and no `pass`.
+`host-bootstrap --apply --lockdown` sends the same payload with the phase `lockdown`. The host refuses it without a `lockdown pending` record and after a lockdown.
+See [Recovery check before the lockdown](../variants.md#recovery-check-before-the-lockdown).
+
+`recovery-check` prints the operator check before the lockdown: the Run As session and the owner-key SSH login through `ssh --apply`.
+It makes no AWS call and writes no file. It refuses `--apply`.
+`ssh --apply` writes its cost lines to standard error, so an SSH client can use it as its `ProxyCommand`.
 
 The Mac secret writer fixes `COMPOSE_FILE=compose.macos.yaml`; bootstrap requires that exact value and renders it into the private service environment.
 Do not weaken the comparison or infer a successful deployment from parser tests.
@@ -202,8 +217,8 @@ The [snapshot move procedure](host-snapshot-move.md) uses a checked clone change
 The current deploy script has these gaps for a snapshot move:
 
 - It does not compare changed snapshot parameters with the installed host commit. An update can finish without installing the new snapshot.
-- `--replace-instance` permits replacement; it does not force it. The flag only sets the guard variable at line 865 of `scripts/aws-host.sh`.
-- `deploy_update` creates and executes its own change set. After the guards pass, line 740 executes it without another approval prompt.
+- `--replace-instance` permits replacement; it does not force it. The flag only sets the guard variable at line 1860 of `scripts/aws-host.sh`.
+- `deploy_update` creates and executes its own change set. After the guards pass, line 1732 executes it without another approval prompt.
 - The guards do not order the old data volume detach before the new attachment. The template uses one `DataVolumeAttachment` for `Instance`.
 
 Proposed separate changes: refuse snapshot-only updates without an explicit host-move plan; separate change-set creation from execution of its reviewed identity.
@@ -235,7 +250,8 @@ See [Pangolin](../options/pangolin.md) for the Porkbun request handling and cert
 
 ## Verify and dry run
 
-`verify` sends one SSM command through `AWS-RunShellScript`.
+`verify` first checks the three generated key names on the development machine. A missing name stops it; an absent `<Project>/generated` secret gives a skip line.
+Then it sends one SSM command through `AWS-RunShellScript`.
 It has four parts: `docker compose ps`, the file-set test, the service list and `scripts/verify-deployed.py`.
 Its inputs are the snapshot path, Compose file set, service names and public names. They include no secret.
 It executes no `verify` command from `kits.lock`, and its host probes make no public request.

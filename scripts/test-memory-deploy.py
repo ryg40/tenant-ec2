@@ -19,6 +19,8 @@ args = sys.argv[1:]
 account = "0" * 12
 prefix = "tenant-ec2-memory-dev-"
 boundary = "arn:aws:iam::" + account + ":policy/" + prefix + "boundary"
+stack = "bootstrap-tenant-ec2-memory-dev"
+change_arn = "arn:aws:cloudformation:us-east-1:" + account + ":changeSet/fixture-changes/fixture-id"
 old_id = "A" * 20
 new_id = "B" * 20
 secret = "C" * 40
@@ -85,19 +87,49 @@ elif operation == "deploy":
     assert "--no-execute-changeset" in args
     assert "--capabilities" in args and "CAPABILITY_NAMED_IAM" in args
     assert Path(args[args.index("--template-file") + 1]).is_file()
+    # The created change set keeps the parameters of this call.
+    overrides = args[args.index("--parameter-overrides") + 1:]
+    (root / "change-set-parameters").write_text(json.dumps(dict(o.split("=", 1) for o in overrides)))
     if mode == "no-change":
         print("No changes to deploy. Stack is up to date")
     elif mode == "unknown-change-set":
         print("No review command returned")
     else:
         print("Changeset created successfully. Run the following command to review changes")
-        print("aws cloudformation describe-change-set --change-set-name arn:aws:cloudformation:us-east-1:" + account + ":changeSet/fixture-changes/fixture-id")
+        print("aws cloudformation describe-change-set --change-set-name " + change_arn)
+elif operation == "wait":
+    assert service[2] == "change-set-create-complete"
+    assert args[args.index("--change-set-name") + 1] == change_arn
+    if mode == "bad-change-set":
+        sys.exit(255)
 elif operation == "describe-change-set":
-    assert args[args.index("--change-set-name") + 1].endswith(":changeSet/fixture-changes/fixture-id")
-    out({"Status": "FAILED" if mode == "bad-change-set" else "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE",
-         "Changes": [{"ResourceChange": {"Action": "Modify", "LogicalResourceId": "Memory", "ResourceType": "AWS::BedrockAgentCore::Memory", "Replacement": "False"}}]})
+    assert args[args.index("--stack-name") + 1] == stack
+    assert args[args.index("--change-set-name") + 1] in ("fixture-changes", change_arn)
+    if mode == "missing-change-set":
+        print(secret, file=sys.stderr)
+        sys.exit(254)
+    saved = root / "change-set-parameters"
+    parameters = json.loads(saved.read_text()) if saved.exists() else {
+        "Project": "tenant-ec2", "Stage": "dev", "AdministratorRole": "Administrator", "AdministratorUser": ""}
+    if mode == "other-admin":
+        parameters["AdministratorUser"] = "ExampleAdmin"
+    if mode == "extra-parameter":
+        parameters["Extra"] = "x"
+    name = "fixture-other" if mode == "other-name" else "fixture-changes"
+    stack_name = stack.replace("-dev", "-test") if mode == "other-stack" else stack
+    arn = "arn:aws:cloudformation:" + ("us-west-2" if mode == "other-region" else "us-east-1") + ":" + account + ":"
+    reply = {"StackName": stack_name, "StackId": arn + "stack/" + stack_name + "/fixture-stack-id",
+             "ChangeSetName": name, "ChangeSetId": arn + "changeSet/" + name + "/fixture-id",
+             "Parameters": [{"ParameterKey": k, "ParameterValue": v} for k, v in parameters.items()],
+             "Status": "FAILED" if mode == "bad-change-set" else "CREATE_COMPLETE",
+             "ExecutionStatus": "EXECUTE_COMPLETE" if mode == "used-change-set" else "AVAILABLE",
+             "Changes": [{"ResourceChange": {"Action": "Modify", "LogicalResourceId": "Memory", "ResourceType": "AWS::BedrockAgentCore::Memory", "Replacement": "False"}}]}
+    if mode == "bad-change-set":
+        reply["StatusReason"] = "Fixture failure in account " + account
+    out(reply)
 elif operation == "execute-change-set":
-    assert args[args.index("--change-set-name") + 1].endswith(":changeSet/fixture-changes/fixture-id")
+    assert args[args.index("--stack-name") + 1] == stack
+    assert args[args.index("--change-set-name") + 1] == change_arn, "only the checked change set executes"
 elif operation == "delete-stack":
     pass
 else:
@@ -171,7 +203,7 @@ class MemoryScriptTests(unittest.TestCase):
         self.assertIn("AdministratorUser= ", result.stdout)
         self.assertEqual(self.operations(), [])
         for user in ("ExampleAdmin", ""):
-            result = self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin",
+            result = self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin",
                                      env={"EC2_MEMORY_ADMINISTRATOR_ROLE": "ExampleRole", "EC2_MEMORY_ADMINISTRATOR_USER": user})
             deploy = [row for row in self.calls() if row[0] == "aws" and "deploy" in row][-1]
             self.assertIn("AdministratorRole=ExampleRole", deploy)
@@ -180,13 +212,14 @@ class MemoryScriptTests(unittest.TestCase):
     def test_administrator_names_refuse_paths_and_wildcards_before_calls(self):
         for setting in ("EC2_MEMORY_ADMINISTRATOR_ROLE", "EC2_MEMORY_ADMINISTRATOR_USER"):
             for value in ("*", "admin?", "team/admin", "a" * 65, "admin name"):
-                with self.subTest(setting=setting, value=value):
-                    self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin",
-                                    env={setting: value}, ok=False)
+                for step in (["--prepare"], ["--execute", "fixture-changes"]):
+                    with self.subTest(setting=setting, value=value, step=step[0]):
+                        self.run_script("deploy", "--stage", "dev", *step, "--profile", "fixture-admin",
+                                        env={setting: value}, ok=False)
         self.assertEqual(self.calls(), [])
 
     def test_missing_or_stale_renderer_stops_deploy(self):
-        self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin", mode="stale", ok=False)
+        self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin", mode="stale", ok=False)
         (self.scripts / "aws-memory.py").unlink()
         self.run_script("deploy", "--stage", "dev", "--dry-run", ok=False)
         self.assertEqual(self.operations(), [])
@@ -200,21 +233,85 @@ class MemoryScriptTests(unittest.TestCase):
                      ("deploy", "--stage", "../dev"), ("deploy", "--stage"),
                      ("keys", "--stage", "dev", "--write"), ("outputs", "--stage", "dev", "--apply"),
                      ("rotate", "--stage", "dev"), ("client-config", "--stage", "dev", "--actor", "../alice"),
-                     ("delete-stack", "--stage", "prod")):
-            self.run_script(*args, ok=False)
+                     ("delete-stack", "--stage", "prod"),
+                     ("deploy", "--stage", "dev", "--prepare"),
+                     ("deploy", "--stage", "dev", "--execute", "fixture-changes"),
+                     ("deploy", "--stage", "dev", "--prepare", "--dry-run", "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--execute", "fixture-changes", "--dry-run", "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--prepare", "--execute", "fixture-changes", "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--execute", "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--execute", "1-changes", "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--execute", "a" * 129, "--profile", "fixture-admin"),
+                     ("deploy", "--stage", "dev", "--execute", "arn:aws:cloudformation:us-east-1:" + "0" * 12
+                      + ":changeSet/fixture-changes/fixture-id", "--profile", "fixture-admin"),
+                     ("keys", "--stage", "dev", "--prepare", "--profile", "fixture-admin"),
+                     ("outputs", "--stage", "dev", "--execute", "fixture-changes")):
+            with self.subTest(args=args):
+                self.run_script(*args, ok=False)
         self.assertEqual(self.calls(), [])
 
-    def test_change_set_execution(self):
-        result = self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin")
-        self.assertEqual(self.operations(), ["deploy", "describe-change-set", "execute-change-set"])
-        self.assertIn("Modify Memory AWS::BedrockAgentCore::Memory False", result.stdout)
-        self.assertLess(result.stdout.index("Modify Memory"), result.stdout.index("execute-change-set"))
+    def test_deploy_apply_refuses_and_names_two_steps(self):
+        result = self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin", ok=False)
+        self.assertIn("--prepare", result.stderr)
+        self.assertIn("--execute <change-set-name>", result.stderr)
+        self.assertEqual(self.calls(), [])
 
-    def test_empty_or_unavailable_change_set_never_executes(self):
-        for mode in ("no-change", "unknown-change-set", "bad-change-set"):
-            self.run_script("deploy", "--stage", "dev", "--apply", "--profile", "fixture-admin",
-                            mode=mode, ok=mode == "no-change")
+    def test_prepare_shows_change_set_and_stops(self):
+        result = self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin")
+        self.assertEqual(self.operations(), ["deploy", "wait", "describe-change-set"])
+        for text in ("Stack: bootstrap-tenant-ec2-memory-dev", "Change set: fixture-changes",
+                     "Status: CREATE_COMPLETE", "Execution status: AVAILABLE", "Resource changes: 1",
+                     "Modify Memory AWS::BedrockAgentCore::Memory False", "Nothing executes in this step."):
+            self.assertIn(text, result.stdout)
+        command = "scripts/aws-memory.sh deploy --stage dev --execute fixture-changes --profile fixture-admin"
+        self.assertIn(command, result.stdout)
+        self.assertLess(result.stdout.index("Modify Memory"), result.stdout.index(command))
+        self.assertNotIn("execute-change-set", result.stdout)
+
+    def test_prepare_without_a_ready_change_set(self):
+        self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin", mode="no-change")
+        self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin", mode="unknown-change-set", ok=False)
+        self.assertEqual(self.operations(), ["deploy", "deploy"])
+        result = self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin", mode="bad-change-set", ok=False)
+        self.assertIn("Status: FAILED", result.stdout)
+        self.assertIn("Reason: Fixture failure in account <account>", result.stdout)
+        self.assertIn("not ready", result.stderr)
+        self.assertNotIn("--execute", result.stdout)
         self.assertNotIn("execute-change-set", self.operations())
+
+    def test_execute_checks_then_executes_the_named_set(self):
+        result = self.run_script("deploy", "--stage", "dev", "--execute", "fixture-changes",
+                                 "--profile", "fixture-admin", trace=True)
+        self.assertEqual(self.operations(), ["describe-change-set", "execute-change-set"])
+        self.assertFalse(any(row[0] == "renderer" for row in self.calls()))
+        describe = [row for row in self.calls() if "describe-change-set" in row][0]
+        self.assertEqual(describe[describe.index("--change-set-name") + 1], "fixture-changes")
+        self.assertIn("Change set: fixture-changes", result.stdout)
+        self.assertIn("execute-change-set --stack-name bootstrap-tenant-ec2-memory-dev --change-set-name fixture-changes",
+                      result.stdout)
+        self.assertIn("describe-stacks --stack-name bootstrap-tenant-ec2-memory-dev", result.stdout)
+        self.assertLess(result.stdout.index("Modify Memory"), result.stdout.index("execute-change-set"))
+        self.assertLess(result.stdout.index("execute-change-set"), result.stdout.index("describe-stacks"))
+
+    def test_execute_refuses_another_or_unready_change_set(self):
+        for mode in ("missing-change-set", "bad-change-set", "used-change-set", "other-stack", "other-name",
+                     "other-region", "other-admin", "extra-parameter"):
+            with self.subTest(mode=mode):
+                self.run_script("deploy", "--stage", "dev", "--execute", "fixture-changes",
+                                "--profile", "fixture-admin", mode=mode, ok=False)
+        self.assertNotIn("execute-change-set", self.operations())
+
+    def test_both_steps_keep_the_administrator_exceptions(self):
+        admin = {"EC2_MEMORY_ADMINISTRATOR_ROLE": "ExampleRole", "EC2_MEMORY_ADMINISTRATOR_USER": "ExampleAdmin"}
+        self.run_script("deploy", "--stage", "dev", "--prepare", "--profile", "fixture-admin", env=admin)
+        for env in ({}, {**admin, "EC2_MEMORY_ADMINISTRATOR_USER": ""}, {**admin, "EC2_MEMORY_ADMINISTRATOR_ROLE": "Administrator"}):
+            with self.subTest(env=env):
+                result = self.run_script("deploy", "--stage", "dev", "--execute", "fixture-changes",
+                                         "--profile", "fixture-admin", env=env, ok=False)
+                self.assertIn("parameters differ", result.stderr)
+        self.assertNotIn("execute-change-set", self.operations())
+        self.run_script("deploy", "--stage", "dev", "--execute", "fixture-changes", "--profile", "fixture-admin", env=admin)
+        self.assertEqual(self.operations()[-1], "execute-change-set")
 
     def test_outputs_cache_and_client_config(self):
         self.run_script("client-config", "--stage", "dev", "--actor", "alice", ok=False)

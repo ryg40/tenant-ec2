@@ -292,6 +292,10 @@
 #                                    docs/diagrams/architecture-graph.json. Needs
 #                                    python3 only; no network call and no skip
 #                                    for CHECK_OFFLINE=1.
+#                         aws look   scripts/archify-aws-look.py --check: each
+#                                    archify view of docs/ holds the current
+#                                    AWS look. Needs python3 only; no network
+#                                    call and no skip for CHECK_OFFLINE=1.
 #                         local run  ok-auth/local-run.sh --upstream stub: the
 #                                    gate starts in a Compose project of its
 #                                    own, with a stub in place of Entra ID. The
@@ -445,14 +449,17 @@ this script:
                      no pin of the agent kit
   selftest           the self-test of scripts/aws-provisioner.sh, of
                      scripts/entra-app.sh, of scripts/security-review.sh, of
-                     scripts/build-diagrams.py, of scripts/dns-migration.py and
-                     of scripts/build-architecture-html.py
+                     scripts/build-diagrams.py, of scripts/dns-migration.py,
+                     of scripts/build-architecture-html.py and of
+                     scripts/archify-aws-look.py
   loaders            the loader tests of the security review skill; skip
                      without Claude Code, Node.js or the Pi package
   scenes             Excalidraw loads each scene of docs/diagrams/; skip with
                      CHECK_OFFLINE=1 and without Playwright or npm
   architecture       docs/architecture.html is the build of its graph source;
                      python3 only, no network call
+  aws look           each archify view of docs/ holds the current AWS look of
+                     scripts/archify-aws-look.py; python3 only, no network call
   local run          the local run of the gate with a stub in place of Entra ID;
                      skip with CHECK_NO_LOCAL_RUN=1
   operations         offline operations, IAM and journal-export regressions
@@ -3888,6 +3895,11 @@ script_selftest "selftest scripts/build-architecture-html.py" scripts/build-arch
 scenes_check
 script_selftest "architecture docs/architecture.html" scripts/build-architecture-html.py \
     python3 -I scripts/build-architecture-html.py --check
+script_selftest "selftest scripts/archify-aws-look.py" scripts/archify-aws-look.py \
+    python3 -I scripts/archify-aws-look.py --selftest
+script_selftest "aws look docs/aws-*.html" scripts/archify-aws-look.py \
+    python3 -I scripts/archify-aws-look.py --check docs/aws-core.html docs/aws-memory.html docs/aws-mac.html \
+    docs/memory-terminal.html
 local_run_check
 
 # --- operations regression checks -------------------------------------------

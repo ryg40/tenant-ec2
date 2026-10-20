@@ -5,7 +5,7 @@
 | Finding | Source | Result |
 | --- | --- | --- |
 | Secret | The rules in `.gitleaks.toml` (gitleaks v8.28.0 default rules, path allowlists removed) | Always fails. |
-| Host value | `scripts/host-values.deny` (tracked, empty), `.local/host-values.deny` (untracked, the values of one host), `scripts/host-values.regex` (private address ranges) | Fails on `portable` and on a `portable/*` tag; a warning elsewhere. |
+| Host value | `scripts/host-values.deny` (tracked, empty), `.local/host-values.deny` (untracked, the values of one host), `scripts/host-values.regex` (private address ranges) | Fails on `portable`, on a `portable/*` tag and in the mode `image`; a warning elsewhere. |
 | Policy | A tracked `.gitleaksignore`, a tracked file under `.local/`, a tracked archive or database dump | Always fails. |
 
 Rules:

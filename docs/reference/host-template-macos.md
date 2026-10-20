@@ -118,7 +118,12 @@ The current agent remains disabled. The first compatible AgentCore release provi
 ## Bootstrap documents
 
 User data writes `/etc/<project>/machine.json`, owned by root, group admin, mode `0644`.
-It contains no service secrets. Its fields are:
+Then it writes the first-boot stage `/etc/<project>/macos/first-boot.zsh`, owned by root, group wheel, mode `0700`, and runs it.
+The stage reads the environment secret, clones and checks the pinned snapshot, and calls the bootstrap.
+`host-bootstrap --apply` runs the same stage again; see [First-boot replay](../variants.md#first-boot-replay).
+The stage accepts one argument, `--lockdown`, and passes it to the bootstrap. Without it, the bootstrap stops before the account lockdown with exit code 3.
+The stage then prints `lockdown pending` and does not write `first-boot.done`; see [Recovery check before the lockdown](../variants.md#recovery-check-before-the-lockdown).
+The machine document contains no service secrets. Its fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -142,10 +147,12 @@ See [Mac runtime qualification](../../config/macos/README.md) for credential tra
 
 ## Lifecycle guards
 
-`host-allocate`, `host-release`, `stop`, `start`, `deploy`, `secret`, `session`, `tunnel` and `ssh` require explicit `--apply` for live action.
+`host-allocate`, `host-release`, `stop`, `start`, `deploy`, `secret`, `session`, `tunnel`, `ssh` and `host-bootstrap` require explicit `--apply` for live action.
 A preview makes no AWS call, provider call, temporary file or mutation.
 `outputs --write` records private output state; it is not a deployment.
 `verify` is read-only service evidence through SSM, not a model or memory acceptance run.
+`host-bootstrap` sends one fixed `AWS-RunShellScript` payload to the stack instance only after the scope checks, an online SSM check and a valid environment secret.
+Only `host-bootstrap --apply --lockdown` approves the account lockdown. `recovery-check` prints the operator check before it and makes no AWS call.
 
 Allocation checks ownership tags, existing stacks and duplicate hosts before creating a new allocation stack.
 Deploy checks stage admission, boundary scope, exact template parameters, reviewed AMI metadata and existing host attachments.
@@ -159,6 +166,7 @@ Warning: stopping does not release the Dedicated Host. Follow the [cost and shut
 Warning: first boot can format the identified blank data disk. Replacement, retention and any later cleanup need explicit review.
 
 Not verified: live IAM enforcement, allocation, AMI startup, APFS matching, account transition, credential refresh, Podman startup, reboot recovery or completed release.
+Not verified: the PIN key login and Run As session before the lockdown, and the recovery steps after it.
 Not verified: full Entra login, allowed-group refusal, browser WebSockets, model requests or AgentCore recall.
 
 ## AWS sources

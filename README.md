@@ -1,19 +1,32 @@
 # tenant-ec2
 
-An install kit with a default Linux variant and a conditional EC2 Mac variant.
+An install kit for a knowledge host with an agent on AWS, behind a Microsoft Entra sign-in.
 A variant selects the complete host design; [compare the variants](docs/variants.md) before installation.
-The default `homelab` variant runs on Amazon Linux 2023 x86_64.
+The default `homelab` variant runs on Amazon Linux 2023 x86_64. A conditional `macos` variant runs on an EC2 Mac Dedicated Host.
 CloudFormation makes the host, its network, its storage and its identity.
 Docker Compose runs the services from the tags and commits in [kits.lock](kits.lock).
 
 The core needs an AWS account, a Microsoft Entra tenant and a domain name.
 It needs no home lab, Copilot account or DNS provider key.
 
-![The core AWS components](docs/diagrams/01-aws-core.svg)
+![The homelab core on AWS](docs/diagrams/aws-core.svg)
 
-Open the [interactive architecture page](docs/architecture.html) for all five diagrams as one graph, with search, tours and a path finder.
+Open [the interactive version of this view](docs/aws-core.html) in a browser from the file system. Its notes list cost, public access, data and keys.
+Two more AWS views show [shared memory from your terminal](docs/aws-memory.html) and [the Mac variant](docs/aws-mac.html).
+The [architecture page](docs/architecture.md) explains the colours, the frames, the detailed diagrams and the [interactive page](docs/architecture.html) of the five diagrams.
 
-Read the [architecture](docs/architecture.md) for the service networks, the login path and the install flow.
+## At a glance
+
+| Question | Answer |
+| --- | --- |
+| What do I open? | `https://ok.<domain>`: OpenKnowledge, after a Microsoft Entra sign-in and the group rule. |
+| What is public? | Only `ok.<domain>`, on ports 80 and 443, by default. SSH answers only the `AdminCidr` range. |
+| What costs money? | The hours of the EC2 instance, the EBS and EFS storage, the public IPv4 address, the Secrets Manager secret and the Bedrock requests. Options add an S3 bucket, snapshots, logs and a billing alarm. |
+| Where is my data? | EBS holds the local databases. EFS holds the OpenKnowledge pages, the OpenViking data and the shared files. |
+| Which keys exist? | The host has no AWS key: its instance role gives it AWS access. The provisioner key stays on the administrator machine. |
+| How do people share memory? | An administrator deploys one [memory stack](docs/memory-stack.md) for each stage. Each person gets one key and uses Pi or Claude Code in a terminal. |
+
+Warning: a deploy creates billed AWS resources. The Mac variant bills its Dedicated Host for 24 hours at least.
 
 ## The core
 
@@ -72,7 +85,7 @@ Not verified: a private agent-kit clone or a complete install with the agent on 
 | [Variants](docs/variants.md) | Linux and Mac comparison, conditional install, accounts, tunnels, costs and release. |
 | [Mac host templates](docs/reference/host-template-macos.md) | Allocation/runtime ownership, parameters, outputs and guards. |
 | [Install](docs/install.md) | The homelab core install, in order. |
-| [Architecture](docs/architecture.md) | Five diagrams, with their Excalidraw scenes. |
+| [Architecture](docs/architecture.md) | The three AWS views, the step view of the shared memory, five detailed diagrams with their Excalidraw scenes, and the interactive page. |
 | [Memory stacks](docs/memory-stack.md) | Stage files, people, access rules, keys and the administrator flow. |
 | [Memory template](docs/reference/memory-template.md) | The generated resources, parameters and deploy commands. |
 | [Entra gate](docs/entra.md) | The application registration, group rule and login checks. |
@@ -81,6 +94,7 @@ Not verified: a private agent-kit clone or a complete install with the agent on 
 | [Compose stack](docs/reference/compose-stack.md) | The services, file sets, networks and model routes. |
 | [Host boot](docs/reference/host-boot.md) | The user data, bootstrap, generated keys and repeat runs; [move to a later snapshot](docs/reference/host-snapshot-move.md). |
 | [Deploy script](docs/reference/deploy-script.md) | Commands, update guards and known limits. |
+| [Mac runtime](config/macos/README.md) | The Mac bootstrap boundary, account and disk checks, Podman lifecycle, credential bridge and gate. |
 | [DNS migration](docs/reference/dns-migration.md) | The move of the DNS zone of a domain to Porkbun, with each record, before the Pangolin certificate. |
 | [Host domain move](docs/reference/host-domain-move.md) | The move of the running host under a new domain subtree, with each check and each way back. |
 | [Checks](docs/reference/checks.md) | Source checks, dry runs, local gate tests, diagrams and hook behavior. |
@@ -92,8 +106,8 @@ Not verified: a private agent-kit clone or a complete install with the agent on 
 | [Publishing](docs/publishing.md) | The portable snapshot procedure. |
 | [Secret handling](docs/secret-handling.md) | The scan, hooks and deny lists. |
 | [Agent rules](AGENTS.md) | Rules for an agent in this repository. |
+| [Issue tracker](docs/agents/issue-tracker.md) | The development work contract, not an install step. |
 | [Kit lock](kits.lock) | The pinned kit sources, builds and checks. |
 
 The private development checkout holds the original requests and planning record.
 The detailed security register stays in the private development checkout.
-docs/agents/issue-tracker.md holds the development work contract, not an install step.

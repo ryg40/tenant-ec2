@@ -20,17 +20,17 @@ The line numbers refer to the scripts that accompany this page.
 
 | Claim | Source |
 | --- | --- |
-| The bootstrap supports a repeat from the installed clone. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L6), line 6: its command interface; line 1751: its final result. |
-| The bootstrap uses the directory that holds its script. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L852), line 852: `repo` comes from the script path. |
-| First boot checks the snapshot commit before any script from that clone runs. | [aws-host.cfn.yaml](../../scripts/aws-host.cfn.yaml#L751), line 753: the comparison with `SnapshotCommit`. |
-| First boot calls the host preparation script. | [aws-host.cfn.yaml](../../scripts/aws-host.cfn.yaml#L757), line 757: the `exec` command. |
-| The bootstrap requires the four durable mounts. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L1030), line 1030: the mount loop; line 947: the check before Compose. |
+| The bootstrap supports a repeat from the installed clone. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L6), line 6: its command interface; line 1783: its final result. |
+| The bootstrap uses the directory that holds its script. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L863), line 863: `repo` comes from the script path. |
+| First boot checks the snapshot commit before any script from that clone runs. | [aws-host.cfn.yaml](../../scripts/aws-host.cfn.yaml#L773), line 773: the comparison with `SnapshotCommit`. |
+| First boot calls the host preparation script. | [aws-host.cfn.yaml](../../scripts/aws-host.cfn.yaml#L777), line 777: the `exec` command. |
+| The bootstrap requires the four durable mounts. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh#L1041), line 1041: the mount loop; line 958: the check before Compose. |
 | Only the three generated keys use the generated secret and the old environment fallback. | [host-bootstrap.sh](../../scripts/host-bootstrap.sh), `render`: the loop over `MADE`. |
 | A replacement reuses one separately attached data volume, not a copy for each instance. | [aws-host.cfn.yaml](../../scripts/aws-host.cfn.yaml#L453), line 456: the attachment names `Instance`; line 457: it names `DataVolume`. |
-| The replacement flag permits a replacement; it does not request one. | [aws-host.sh](../../scripts/aws-host.sh#L723), line 723: the guard tests `replace`; line 865: the flag sets it. |
+| The replacement flag permits a replacement; it does not request one. | [aws-host.sh](../../scripts/aws-host.sh#L1715), line 1715: the guard tests `replace`; line 1860: the flag sets it. |
 
 Not verified: cloud-init runs user data only at first boot on the installed host.
-The template states that contract at line 702; it has no update-time command to change an existing clone.
+The template states that contract at line 722; it has no update-time command to change an existing clone.
 A live update must compare the host commit, not infer it from stack status.
 
 ## Before either method
@@ -404,7 +404,7 @@ Not verified: reuse of the old environment file, keys and storage after replacem
 Not verified: the state of each service after an instance replacement. The verifier and application checks must prove it.
 Not verified: public routes, certificates, login and agent integrations after replacement. Run the separate approved checks from Method 1.
 
-The template deletes the old root volume on termination at line 698.
+The template deletes the old root volume on termination at line 718.
 The new instance builds its images again; a build record on EBS does not preserve an image from the old root volume.
 
 ### Way back

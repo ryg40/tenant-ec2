@@ -44,11 +44,11 @@ A source check never qualifies the dormant agent or bypasses its upstream releas
 | `validate-template` | The same templates. | AWS CLI version 2, profile `tenant-ec2`. This read-only call is skipped without the profile or with `CHECK_OFFLINE=1`. |
 | `memory render` | Each `config/memory/*.yaml`, compared with its generated stage template. | Python 3 and PyYAML through `scripts/aws-memory.py check --stage <stage>`; skip when the renderer or stage files are absent. |
 | `memory stack` | Schema refusals, memory and file scopes, administrator exceptions, policy sizes and deterministic templates. | `python3 scripts/test-memory-stack.py`; needs PyYAML. No AWS call. |
-| `memory deploy` | Deploy previews, parameter forwarding, write gates, keys and output handling with isolated stubs. | `python3 scripts/test-memory-deploy.py`; no AWS call or real key creation. |
+| `memory deploy` | Deploy previews, the prepare and execute steps, parameter forwarding, write gates, keys and output handling with isolated stubs. | `python3 scripts/test-memory-deploy.py`; no AWS call or real key creation. |
 | `shellcheck` | Each `*.sh`, executable shell text under `scripts/`, and each Git hook. | `shellcheck` 0.10.0 or later. |
 | `compose` | All four file sets, service and network memberships, port publishing, required names and option isolation. It compares each environment name of the agent and its value with the release contract, with `off` and `mcp`. | Docker with the Compose plugin and a stub environment file. |
-| `gateway routes` | Core and Copilot route names, configuration and model settings. | Python 3 and PyYAML. |
-| `blueprint` | Selected Pangolin resources, the gate target and path rules. | Python 3 and `envsubst`. |
+| `gateway routes` | Core and Copilot route names, configuration and model settings. | Shell tools: `grep`, `sed` and `awk`. |
+| `blueprint` | Selected Pangolin resources, the gate target and path rules. | `envsubst` through `scripts/render-pangolin.sh`. |
 | `core edge` | The Caddy configuration and request paths, administrator range, refused paths and missing-name behavior. | Docker; local stubs replace the service targets. |
 | `render` | The host template with each `EnablePangolin` and `EnableBucket` value; security group ports and instance-role limits. | Python 3 and PyYAML. |
 | `dry run` | `scripts/aws-host.sh --dry-run` for `deploy`, `secret`, `dns` and `verify`, with the core and each option set. | Python 3 and command stubs. |
@@ -56,7 +56,7 @@ A source check never qualifies the dormant agent or bypasses its upstream releas
 | `providers` | DNS plans, creation, correction, repeat runs, refused credentials and private credential files for every provider. | Python 3 and command stubs with fake zones. |
 | Bootstrap dry run | `scripts/host-bootstrap.sh --dry-run` with a fixture in place of `/`. | Python 3, `envsubst` and command stubs. |
 | `environment forms` | Four lines, one per file set. Shared form tests, safe messages, first-boot exceptions and refusal before a secret write. | Python 3, edge shell tools and `envsubst`; an AWS stub records writes. |
-| `start` | The real bootstrap Compose command for each file set, including `--remove-orphans` and the health wait. | Python 3 and a Docker stub. It starts no container. |
+| `start` | The real bootstrap Compose command for each file set, including `--remove-orphans` and the health wait. | `awk` and a Docker stub. It starts no container. |
 | `option contract` | Agreement on Compose files, necessary names and services across the check, bootstrap, deploy script and verifier. | Python 3 and command stubs. It tests the agent with and without a pin. |
 | `selftest scripts/aws-provisioner.sh` | Provisioner helper fixtures, including the credential-store selection. | The script's `selftest` command with isolated stubs. |
 | `selftest scripts/entra-app.sh` | Entra registration helper fixtures. | The script's `selftest` command with an Azure CLI stub. |
@@ -67,6 +67,8 @@ A source check never qualifies the dormant agent or bypasses its upstream releas
 | `selftest scripts/build-architecture-html.py` | The builder of the interactive page: invalid graph fixtures, a stable build, the layout, the edge routes and the compare step. | Python 3 and `--selftest`; fixtures of its own and no network call. |
 | `scenes` | Excalidraw loads each scene and compares its SVG export. | Python Playwright with Chromium, npm and the pinned packages. |
 | `architecture` | `docs/architecture.html` is the build of `docs/diagrams/architecture-graph.json`. | Python 3 and `--check`; no network call, also with `CHECK_OFFLINE=1`. |
+| `selftest scripts/archify-aws-look.py` | The AWS look: one block in each page, the light default, the frame spacing, the frame titles, and no frame pass for a workflow view. | Python 3 and `--selftest`; fixtures of its own and no network call. |
+| `aws look docs/aws-*.html` | Each archify view of `docs/` holds the current AWS look. | Python 3 and `--check`; no network call, also with `CHECK_OFFLINE=1`. It does not run archify. |
 | `local run` | The real gate image with a stub identity provider and upstream. | Docker, Python 3 and `ok-auth/local-run.sh --upstream stub`. |
 | `operations regression` | The templates, the IAM limits, the journal routing, the cursor, the rotation, the agent files and the bootstrap switch. | `python3 -I scripts/test-operations.py`; needs PyYAML. No network call. |
 | `storage regression` | The order of the first boot, a missing or late mount, the checks at a restart, the fstab paths, the unit syntax and the Git ownership. It runs the Compose command of the bootstrap for each of the four file sets. | `python3 -I scripts/test-storage.py`; needs PyYAML and the systemd analysis tools. The fixture with numeric ids needs root. No service and no mount runs. |
@@ -98,6 +100,9 @@ Thus cfn-lint, size checks and read-only AWS validation cover those templates wi
 The adjacent `memory stack` and `memory deploy` steps run the two memory regression scripts in online and offline checks.
 Each step skips only when its test script is absent; a missing Python tool or failed test fails the gate.
 They also run on the exact staged copy in the commit hook.
+The development tests of `publish regression` also test the `memory render` step and the tag keys of the memory templates.
+The tag key test refuses a resource tag key that differs from a stack tag key of the deploy helper only in case.
+A snapshot has no development tests, so it has no tag key test.
 
 A template larger than 51200 bytes fails, also in offline mode.
 `aws cloudformation deploy` sends a larger template through S3; the provisioner has no right to upload a template object.
@@ -244,6 +249,11 @@ Run `python3 -I scripts/build-architecture-html.py --check` to compare the commi
 The check script runs both commands as `selftest scripts/build-architecture-html.py` and `architecture docs/architecture.html`.
 Both need Python 3 only, so offline mode runs them too.
 The [architecture page](../architecture.md#interactive-page) gives the build command.
+
+Run `python3 -I scripts/archify-aws-look.py --selftest` for the fixtures of the AWS look.
+Run `python3 -I scripts/archify-aws-look.py --check docs/aws-core.html docs/aws-memory.html docs/aws-mac.html docs/memory-terminal.html` to find a view without the current look.
+The check script runs both commands as `selftest scripts/archify-aws-look.py` and `aws look docs/aws-*.html`.
+The [architecture page](../architecture.md#how-the-aws-views-are-built) gives the build of the views with archify.
 
 ## Hooks and fallback tools
 
