@@ -235,6 +235,22 @@ esac
     require(saved.exists() and staged.exists(), "valid secret never reaches the file and AWS write stubs")
     body = json.loads(saved.read_text())
     require(all(body[name] == "" for name in empty.split()), "empty values change in the secret")
+    dns01_name = "EC2_CLOUDFLARE_DNS01_TOKEN"
+    pair = "EC2_PORKBUN_API_KEY EC2_PORKBUN_SECRET_KEY".split()
+    require(dns01_name not in body, "secret writes the Cloudflare host token with another provider")
+    if "pangolin" in options:
+        # The edge needs a DNS provider of the DNS-01 challenge.
+        for provider in ("manual", "route53"):
+            saved.unlink(missing_ok=True)
+            result = run(args, dict(first, EC2_DNS_PROVIDER=provider), True)
+            require(result.returncode != 0 and not saved.exists(),
+                    "the option pangolin passes with the provider " + provider)
+        # The secret holds the host token of the provider, and no name of another provider.
+        result = run(args, dict(first, EC2_DNS_PROVIDER="cloudflare"), True)
+        require(result.returncode == 0 and saved.exists(), "the provider cloudflare fails")
+        body = json.loads(saved.read_text())
+        require(dns01_name in body and not any(name in body for name in pair),
+                "secret writes the wrong DNS names with the provider cloudflare")
 
     # The same helper runs before bootstrap render writes the host file.
     text = (REPO / "scripts/host-bootstrap.sh").read_text()
@@ -246,6 +262,17 @@ esac
                              str(REPO / ".env.example"), str(REPO), str(host_file)],
                             input=json.dumps(bad), env=environment, capture_output=True, text=True)
     require(result.returncode != 0 and not host_file.exists(), "bootstrap render writes a wrong form")
+    if "pangolin" in options:
+        # Step 2 needs the host token of the provider cloudflare.
+        for value, ok in (("", False), ("forms-fixture-value-7q9z", True)):
+            data = dict(values, EC2_DNS_PROVIDER="cloudflare", **{dns01_name: value})
+            result = subprocess.run([str(bin_dir / "python3"), "-I", str(code), "render",
+                                     str(REPO / ".env.example"), str(REPO), str(host_file)],
+                                    input=json.dumps(data), env=environment, capture_output=True,
+                                    text=True)
+            require((result.returncode == 0) == ok and host_file.exists() == ok,
+                    "bootstrap render with the provider cloudflare: " + result.stderr)
+        host_file.unlink()
     # Check a real dry run at step 2, before any host command is needed.
     stack = root / "stack.env"
     stack.write_text("EC2_PROJECT=tenant-ec2\nEC2_AWS_REGION=us-east-1\nEC2_SECRET_ID=tenant-ec2/env\n")

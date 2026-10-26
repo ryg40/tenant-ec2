@@ -50,3 +50,8 @@ caddy/config/
 # Python bytecode of the publish tooling
 __pycache__/
 *.pyc
+
+# The development-only memory explorer
+prototypes/memory-explorer/.kit/
+prototypes/memory-explorer/.kit
+.local/memory-explorer/

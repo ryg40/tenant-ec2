@@ -4,6 +4,8 @@ OpenKnowledge has no login of its own. The service `ok-auth` is its login gate: 
 
 This page tells you how to make the app registration, which names to set, how to prove the gate and how to change it to another provider.
 
+A second app of the same tenant serves a memory stage: section [The memory app of a stage](#the-memory-app-of-a-stage). It is not a part of the gate.
+
 ## The parts
 
 | Part | Where | Role |
@@ -241,3 +243,45 @@ The local run and `scripts/entra-app.sh` are for Entra ID only. With `provider =
 | The agent gets the status 403 "Host header not allowed" | The agent does not use the public name | Keep `OPENKNOWLEDGE_MCP_URL` as `compose.yaml` has it |
 
 Checked with the gate image: the two start faults, the status 403 with "unauthorized" and the refusal of Microsoft Graph, the last two against the stub of the local run. Not verified: each other row. No run made a fault against Entra ID, so no run showed an AADSTS number.
+
+## The memory app of a stage
+
+Each memory stage has its own Entra app beside the gate. It is the OpenID Connect provider of the Cognito user pool of the stage: a person signs in at Entra ID, and Cognito gives the person a session of the own role. The gate and the memory app share no app registration, no secret and no name.
+
+| Property | The gate | The memory app of a stage |
+| --- | --- | --- |
+| Script | `scripts/entra-app.sh` | `scripts/entra-memory-app.sh` |
+| Name | `<project> OpenKnowledge gate` | `<project> memory <stage>`, for example `tenant-ec2 memory dev` |
+| Redirect URI (Web) | `https://ok.<domain>/oauth2/callback` | `https://<project>-memory-<stage>.auth.<region>.amazoncognito.com/oauth2/idpresponse` |
+| Delegated Graph permissions | `User.Read` | `openid`, `profile` and `User.Read`, with admin consent for all users |
+| Who gets a token | A member of the security group | A user assigned directly to the enterprise application ("Assignment required" on) |
+| Where the values go | The environment file `.env` | credsync: `TENANT_EC2_MEMORY_<STAGE>_ENTRA_TENANT_ID`, `TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_ID` and `TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_SECRET` |
+| Life of the client secret | 180 days by default, 730 at most | 180 days by default and at most (six months or less) |
+
+The region comes from the line `region:` of `config/memory/<stage>.yaml`; `--region` overrides it.
+
+### Make the memory app with the script
+
+The script needs the Azure CLI, `python3` and `bw-session-update.sh` of credsync.
+
+1. Run `scripts/entra-memory-app.sh --dry-run --stage dev --user <user> apply`. It prints each of the nine steps and each Azure CLI command, and it makes no call.
+2. Run `az login --tenant <tenant id>`. Sign in with an identity that can make an app registration and grant admin consent.
+3. Run `scripts/entra-memory-app.sh --stage dev --user <user> apply`. Give `--user` one time for each person: an object id or a user principal name.
+4. Write down the end date of the client secret that the script prints.
+5. Run `az logout`.
+
+Facts:
+
+- The script prints no secret and no id. It names a user by its place on the command line.
+- The client secret goes from the Azure CLI through a pipe to the standard input of `bw-session-update.sh`. It is in no argument of a command.
+- A re-run reuses the app with the name, the enterprise application, the consent grant and each assignment. It makes no second client secret.
+- `--rotate` makes a new client secret also when the app has one. The older secret stays valid until its end date; the script prints the two commands that remove it.
+- When Entra ID makes a new client secret and credsync does not store it, the script stops and says: run again with `--rotate`.
+- The script reads the ids of the three scopes from the service principal of Microsoft Graph in the tenant.
+- `apply` sets the redirect list to the one URI of the stage, and it sets the permission list to the three permissions. Another entry of the two lists goes.
+- The script adds assignments and removes none. To remove a person, remove the assignment in the Entra admin centre.
+- The users come from the command line only, never from a tracked file.
+- A Global Administrator can sign in at the app without an assignment. The person gets no AWS role without a binding of the memory stage.
+- `scripts/entra-memory-app.sh selftest` runs the script with a stub of `az` and of `bw-session-update.sh`: the dry run, a first run, a re-run, `--rotate`, a consent grant with other scopes, a failed secret, a failed write of credsync and a retry of the enterprise application. It checks that the secret is on no output and in no argument of a stub call. It makes no call to Azure.
+- Not verified: no run of `scripts/entra-memory-app.sh` made a call to Azure. The dev app `tenant-ec2 memory dev` was made with the Azure CLI by an earlier one-off script with the same steps.
+- Not verified: the script reads only the first page of the assignments of the enterprise application.

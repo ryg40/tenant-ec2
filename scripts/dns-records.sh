@@ -152,9 +152,9 @@ def options(found):
     provider = found.get("EC2_DNS_PROVIDER", "") or "manual"
     if provider not in PROVIDERS:
         stop("EC2_DNS_PROVIDER is not one of these names: " + " ".join(PROVIDERS))
-    if "pangolin" in active and provider != "porkbun":
-        stop("the option pangolin needs EC2_DNS_PROVIDER=porkbun: its certificate uses the "
-             "DNS-01 challenge through Porkbun")
+    if "pangolin" in active and provider not in ("porkbun", "cloudflare"):
+        stop("the option pangolin needs EC2_DNS_PROVIDER=porkbun or cloudflare: its "
+             "certificate uses the DNS-01 challenge through that provider")
     print("options=%s" % shlex.quote(" ".join(active)))
     print("edge_names=%s" % shlex.quote(" ".join(edge)))
     print("dns_provider=%s" % shlex.quote(provider))

@@ -638,6 +638,162 @@ class MemoryTests(unittest.TestCase):
             with self.assertRaisesRegex(memory.Invalid, "template: must be at most"):
                 memory.render(config)
 
+    def identities(self, **people):
+        return {"schemaVersion": 1, "stage": "dev", "identities": {
+            actor: f"us-east-1:00000000-0000-4000-8000-{n:012}" for n, actor in enumerate(people, 1)}}
+
+    def test_identity_overlay_gives_one_role_per_bound_person(self):
+        self.config["people"][2]["iamUser"] = False
+        overlay = self.identities(alice=1, chen=1)
+        config = memory.bind_identities(memory.validate_config(self.config, "dev"), overlay)
+        document = yaml.safe_load(memory.render(config))
+        resources = document["Resources"]
+        alice, chen = memory.person_logical_id("alice"), memory.person_logical_id("chen")
+        self.assertEqual([k for k in resources if k.endswith("Role")], [alice + "Role", chen + "Role"])
+        self.assertNotIn(chen, resources)
+        self.assertIn(memory.person_logical_id("dana"), resources)
+        user, role = resources[alice]["Properties"], resources[alice + "Role"]["Properties"]
+        self.assertEqual(resources[alice + "Role"]["Type"], "AWS::IAM::Role")
+        self.assertEqual(role["RoleName"], {"Fn::Sub": "${Project}-memory-${Stage}-person-alice-role"})
+        self.assertEqual(role["Policies"], user["Policies"])
+        self.assertEqual(role["Tags"], user["Tags"])
+        self.assertEqual(role["PermissionsBoundary"], {"Ref": "Boundary"})
+        self.assertEqual(role["MaxSessionDuration"], 3600)
+        self.assertEqual(resources[chen + "Role"]["Properties"]["Policies"][0]["PolicyDocument"],
+                         memory.person_policy(config, "chen"))
+        principals = resources["BucketPolicy"]["Properties"]["PolicyDocument"]["Statement"][1]["Condition"]["ArnNotLike"]["aws:PrincipalArn"]
+        self.assertIn({"Fn::GetAtt": [alice + "Role", "Arn"]}, principals)
+        self.assertIn({"Fn::GetAtt": [chen + "Role", "Arn"]}, principals)
+        self.assertNotIn({"Fn::GetAtt": [chen, "Arn"]}, principals)
+        self.assertEqual(document["Outputs"]["PersonRoles"]["Value"], {"Fn::Join": [",", [{"Ref": alice + "Role"}, {"Ref": chen + "Role"}]]})
+        self.assertNotIn("chen", str(document["Outputs"]["PersonUsers"]))
+        self.assertEqual(document["Parameters"]["Project"]["MaxLength"], 31)
+        for stage in memory.STAGES:
+            text = (ROOT / "scripts" / f"aws-memory-{stage}.cfn.yaml").read_text()
+            self.assertNotIn("ImportValue", text)
+            self.assertNotIn("PersonRoles", text)
+        self.config["people"] = [{"actorId": "a" * 31, "pin": "XYZ1000", "status": "active"}]
+        self.config["projects"] = []
+        with self.assertRaisesRegex(memory.Invalid, "the IAM role name exceeds 64"):
+            memory.render(memory.bind_identities(self.config, self.identities(**{"a" * 31: 1})))
+        self.config["people"] = [{"actorId": f"person-{i:03}", "pin": f"XYZ{i:04}", "status": "active"} for i in range(80)]
+        bound = memory.bind_identities(self.config, self.identities(**{p["actorId"]: 1 for p in self.config["people"]}))
+        with self.assertRaisesRegex(memory.Invalid, r"; ([0-9]+) active people fit in sorted actor order \(\1 users and \1 roles\)"):
+            memory.render(bound)
+
+    def test_person_role_trust_is_one_web_identity_statement_with_no_tag_session(self):
+        # With sts:TagSession, a session tag actorId would replace the actorId tag of the role,
+        # and a rule on that tag would follow the session, not the person.
+        self.config["people"][2]["iamUser"] = False
+        overlay = self.identities(**{p["actorId"]: 1 for p in self.config["people"] if p["status"] == "active"})
+        resources = yaml.safe_load(memory.render(memory.bind_identities(memory.validate_config(self.config, "dev"), overlay)))["Resources"]
+        roles = {memory.person_logical_id(actor) + "Role": actor for actor in overlay["identities"]}
+        # Each role of the template is checked, not only the expected ones.
+        self.assertEqual({k for k, v in resources.items() if v["Type"] == "AWS::IAM::Role"}, set(roles))
+        for logical_id, actor in roles.items():
+            with self.subTest(actor=actor):
+                trust = resources[logical_id]["Properties"]["AssumeRolePolicyDocument"]
+                self.assertNotIn("TagSession", json.dumps(trust))
+                self.assertEqual(len(trust["Statement"]), 1)
+                statement = trust["Statement"][0]
+                self.assertEqual(set(statement), {"Sid", "Effect", "Principal", "Action", "Condition"})
+                self.assertEqual(statement["Effect"], "Allow")
+                self.assertEqual(statement["Principal"], {"Federated": "cognito-identity.amazonaws.com"})
+                self.assertEqual(statement["Action"], "sts:AssumeRoleWithWebIdentity")
+                self.assertEqual(statement["Condition"], {
+                    "StringEquals": {"cognito-identity.amazonaws.com:aud": {"Fn::ImportValue": {
+                        "Fn::Sub": "${Project}-memory-identity-${Stage}:IdentityPoolId"}},
+                        "cognito-identity.amazonaws.com:sub": overlay["identities"][actor]},
+                    "ForAnyValue:StringEquals": {"cognito-identity.amazonaws.com:amr": "authenticated"}})
+
+    def test_identity_overlay_refusals(self):
+        config = memory.validate_config(self.config, "dev")
+        cases = [
+            (self.identities(alice=1, bruno=1) | {"identities": {"alice": "us-east-1:00000000-0000-4000-8000-000000000001",
+                                                                 "bruno": "us-east-1:00000000-0000-4000-8000-000000000001"}},
+             "identities.bruno: shares one identity with alice"),
+            ({"schemaVersion": 1, "stage": "dev", "identities": {"alice": "us-east-1:not-a-uuid"}}, "identities.alice: must have the form"),
+            ({"schemaVersion": 1, "stage": "dev", "identities": {"alice": "US-EAST-1:00000000-0000-4000-8000-000000000001"}}, "must have the form"),
+            ({"schemaVersion": 1, "stage": "dev", "identities": {"alice": "eu-west-1:00000000-0000-4000-8000-000000000001"}},
+             "identities.alice: must be in the region of the stage"),
+            (self.identities(erin=1), "identities.erin: must name a person of the stage file"),
+            (self.identities(alice=1) | {"stage": "test"}, "identities.stage: must match"),
+            (self.identities(alice=1) | {"extra": 1}, "identities.extra: unknown field"),
+        ]
+        for overlay, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(memory.Invalid, message):
+                memory.bind_identities(config, overlay)
+        offboarded = copy.deepcopy(config)
+        offboarded["people"][3]["status"] = "offboarded"
+        offboarded["projects"][0]["members"].remove("dana")
+        with self.assertRaisesRegex(memory.Invalid, "identities.dana: must name an active person"):
+            memory.bind_identities(offboarded, self.identities(dana=1))
+        self.config["people"][0]["iamUser"] = False
+        with self.assertRaisesRegex(memory.Invalid, "people.alice.iamUser: false needs an identity"):
+            memory.bind_identities(memory.validate_config(self.config, "dev"), self.identities(bruno=1))
+        self.config["people"][0]["iamUser"] = "false"
+        self.invalid(self.config, "people\\[0\\].iamUser: must be a boolean")
+
+    def test_render_and_check_with_the_overlay_keep_identities_out_of_the_tracked_template(self):
+        def call(args):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                result = memory.main(args)
+            return result, stdout.getvalue(), stderr.getvalue()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            (root / "config/memory").mkdir(parents=True)
+            (root / "config/memory/dev.yaml").write_text((ROOT / "config/memory/dev.yaml").read_text())
+            (root / ".local/memory").mkdir(parents=True)
+            overlay = self.identities(bruno=1)
+            (root / ".local/memory/dev.identities.yaml").write_text(yaml.safe_dump(overlay))
+            with patch.object(memory, "ROOT", root):
+                result, stdout, stderr = call(["render", "--stage", "dev"])
+                self.assertEqual(result, 0, stderr)
+                tracked = (root / "scripts/aws-memory-dev.cfn.yaml").read_bytes()
+                local = root / ".local/memory/aws-memory-dev.cfn.yaml"
+                self.assertEqual(tracked, (ROOT / "scripts/aws-memory-dev.cfn.yaml").read_bytes())
+                self.assertNotIn(overlay["identities"]["bruno"].encode(), tracked)
+                self.assertIn(overlay["identities"]["bruno"], local.read_text())
+                self.assertEqual(local.stat().st_mode & 0o777, 0o600)
+                self.assertIn("person-bruno-role", local.read_text())
+                result, stdout, stderr = call(["check", "--stage", "dev"])
+                self.assertEqual(result, 0, stderr)
+                self.assertIn("with the identity overlay", stdout)
+                (root / ".local/memory/dev.identities.yaml").write_text(yaml.safe_dump(self.identities(alice=1)))
+                result, stdout, stderr = call(["check", "--stage", "dev"])
+                self.assertEqual(result, 1)
+                self.assertIn(".local/memory/aws-memory-dev.cfn.yaml: differs", stderr)
+                (root / ".local/memory/dev.identities.yaml").unlink()
+                self.assertEqual(call(["check", "--stage", "dev"])[0], 0)
+
+    def test_main_renders_and_checks_iam_user_false_with_and_without_its_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            (root / "config/memory").mkdir(parents=True)
+            self.config["people"][2]["iamUser"] = False
+            (root / "config/memory/dev.yaml").write_text(yaml.safe_dump(self.config))
+            (root / ".local/memory").mkdir(parents=True)
+            overlay = root / ".local/memory/dev.identities.yaml"
+            overlay.write_text(yaml.safe_dump(self.identities(chen=1)))
+            chen = memory.person_logical_id("chen")
+            with patch.object(memory, "ROOT", root), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(memory.main(["render", "--stage", "dev"]), 0, stderr.getvalue())
+                self.assertEqual(memory.main(["check", "--stage", "dev"]), 0, stderr.getvalue())
+                self.assertEqual(memory.main(["policy", "--stage", "dev", "--actor", "chen"]), 0, stderr.getvalue())
+                tracked = yaml.safe_load((root / "scripts/aws-memory-dev.cfn.yaml").read_text())["Resources"]
+                local = yaml.safe_load((root / ".local/memory/aws-memory-dev.cfn.yaml").read_text())["Resources"]
+                self.assertFalse({chen, chen + "Role"} & set(tracked))
+                self.assertIn(chen + "Role", local)
+                self.assertNotIn(chen, local)
+                for text, message in ((yaml.safe_dump(self.identities(alice=1)), "people.chen.iamUser: false needs an identity"),
+                                      ("", "identities: must be a mapping")):
+                    overlay.write_text(text)
+                    self.assertEqual(memory.main(["render", "--stage", "dev"]), 1)
+                    self.assertIn(message, stderr.getvalue())
+
     def test_host_commands_from_temporary_fixture_do_not_read_credentials_or_write_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

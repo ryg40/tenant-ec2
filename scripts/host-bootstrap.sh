@@ -83,9 +83,11 @@
 #   - a name of Part 1 of .env.example with no value or a placeholder;
 #   - a name with an empty value in the block `Option <name>` of Part 3, when EC2_OPTIONS
 #     holds <name>: no value or a placeholder;
-#   - a name that an active Compose file reads in the form ${NAME:?...} with no value.
-#     With the option pangolin, the two names of the block `DNS provider porkbun` are
-#     such names. The script reads no other name of a DNS provider block;
+#   - a name that an active Compose file reads in the form ${NAME:?...} with no value;
+#   - with the option pangolin, the host names of the DNS provider of EC2_DNS_PROVIDER:
+#     the two names of the block `DNS provider porkbun` with `porkbun`, and
+#     EC2_CLOUDFLARE_DNS01_TOKEN with `cloudflare`, with no value or a placeholder.
+#     Another provider stops the script. It reads no other name of a DNS provider block;
 #   - a setting of the active edge that caddy/start.sh or scripts/render-pangolin.sh
 #     refuses;
 #   - a model setting of the agent or of OpenViking that is not a gateway route of the
@@ -212,6 +214,13 @@ WEB_SEARCH_NAMES = (
     "EC2_PI_DURABLE_WEB_SEARCH_MCP_URL",
     "EC2_PI_DURABLE_WEB_SEARCH_MCP_TOKEN",
 )
+# The names of a DNS provider block that the option pangolin needs on the host, for each
+# provider of the edge (HOST_DNS_NAMES of scripts/aws-host.sh). Traefik reads them.
+HOST_DNS_NAMES = {
+    "porkbun": ("EC2_PORKBUN_API_KEY",
+                "EC2_PORKBUN_SECRET_KEY"),
+    "cloudflare": ("EC2_CLOUDFLARE_DNS01_TOKEN",),
+}
 # The option names of EC2_OPTIONS and the public names of EC2_EDGE_NAMES.
 KNOWN_OPTIONS = ("pangolin", "copilot")
 EDGE_NAMES = ("ok", "agent", "llm", "ov")
@@ -410,9 +419,16 @@ def problems(found, sample_path, repo):
             names.append(name)
             if name not in OPTIONAL:
                 need.append(name)
+    provider_bad = ""
     if "pangolin" in options:
-        # The one DNS provider block that the host reads: Traefik needs the pair.
-        names += [name for name, _ in blocks.get(("DNS provider", "porkbun"), [])]
+        # The host names of the one DNS provider that Traefik uses for its certificate.
+        provider = found.get("EC2_DNS_PROVIDER", "")
+        host = HOST_DNS_NAMES.get(provider)
+        if host is None:
+            provider_bad = "the option pangolin needs EC2_DNS_PROVIDER=porkbun or cloudflare"
+        else:
+            names += host
+            need += host
     # Compose stops on an empty value of each such name, also for a service that a
     # command does not start. Step 7 makes the names of MADE.
     for file in compose_files(options):
@@ -420,7 +436,7 @@ def problems(found, sample_path, repo):
                  if n not in MADE and n not in need]
     empty = [n for n in need if not found.get(n)]
     fake = [n for n in names if found.get(n) and placeholder(found[n], sample.get(n, ""))]
-    out = []
+    out = [provider_bad] if provider_bad else []
     if empty:
         out.append("no value for " + " ".join(empty))
     if fake:
@@ -496,6 +512,7 @@ def forms(found, repo):
             "EC2_GERBIL_BASE_ENDPOINT": "must use letters, digits, dots or hyphens, with letters or digits at both ends",
             "EC2_PANGOLIN_SITE": "must use letters, digits, underscores or hyphens, with letters or digits at both ends",
             "EC2_EDGE_NAMES": "must list ok, agent, llm or ov with commas, no blanks and no duplicate",
+            "EC2_DNS_PROVIDER": "must be porkbun or cloudflare with the option pangolin",
         }
         for name, rule in rules.items():
             if re.search(r"\b" + name + r"\b", result.stderr):

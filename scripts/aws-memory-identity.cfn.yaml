@@ -1,0 +1,143 @@
+# The Cognito identity of one memory stage. See docs/memory-stack.md#the-identity-stack.
+# Stack: bootstrap-${Project}-memory-identity-${Stage}. Deploy: scripts/aws-memory.sh identity.
+# Entra sign-in -> Cognito user pool -> identity pool in the basic (classic) flow.
+# No IdentityPoolRoleAttachment: role mappings make GetOpenIdToken refuse the basic flow.
+# The Entra values come from a parameters file in RAM. No identifier is in this file.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The Cognito identity of one memory stage (Entra sign-in, user pool, identity pool).
+
+Parameters:
+  Project:
+    Type: String
+    Default: tenant-ec2
+    AllowedPattern: '[a-z][a-z0-9-]{0,30}'
+    Description: The project name of the memory stack.
+  Stage:
+    Type: String
+    AllowedValues: [dev, test, prod]
+    Description: The memory stage.
+  EntraTenantId:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '[0-9a-fA-F-]{36}'
+    Description: The Entra tenant ID (a GUID). From TENANT_EC2_MEMORY_<STAGE>_ENTRA_TENANT_ID.
+  EntraClientId:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '[0-9a-fA-F-]{36}'
+    Description: The Entra application (client) ID. From TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_ID.
+  EntraClientSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: The Entra client secret value. From TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_SECRET.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${Project}-memory-${Stage}
+      UserPoolTier: LITE
+      DeletionProtection: INACTIVE
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      # Mutable: Cognito writes a mapped attribute at each sign-in.
+      Schema:
+        - Name: entra_oid
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      UserPoolTags:
+        purpose: agentcore-memory
+
+  # Entra has the idpresponse URL of this prefix. ManagedLoginVersion 1 is the classic page.
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub ${Project}-memory-${Stage}
+      ManagedLoginVersion: 1
+
+  EntraProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: Entra
+      ProviderType: OIDC
+      ProviderDetails:
+        client_id: !Ref EntraClientId
+        client_secret: !Ref EntraClientSecret
+        attributes_request_method: GET
+        oidc_issuer: !Sub https://login.microsoftonline.com/${EntraTenantId}/v2.0
+        authorize_scopes: openid profile
+      AttributeMapping:
+        custom:entra_oid: oid
+
+  # The public terminal client: the code flow with PKCE and no client secret.
+  TerminalClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: EntraProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub ${Project}-memory-${Stage}-terminal
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthScopes:
+        - openid
+        - profile
+      CallbackURLs:
+        - http://localhost:8400/callback
+      SupportedIdentityProviders:
+        - Entra
+      ExplicitAuthFlows:
+        - ALLOW_REFRESH_TOKEN_AUTH
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 30
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      TokenValidityUnits:
+        RefreshToken: days
+        AccessToken: minutes
+        IdToken: minutes
+      ReadAttributes:
+        - custom:entra_oid
+      # Cognito must write a mapped attribute at each sign-in.
+      WriteAttributes:
+        - custom:entra_oid
+
+  IdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      # An identity pool name takes no hyphen.
+      IdentityPoolName: !Join ['_', !Split ['-', !Sub '${Project}_memory_${Stage}']]
+      AllowClassicFlow: true
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref TerminalClient
+          ProviderName: !GetAtt UserPool.ProviderName
+          ServerSideTokenCheck: true
+      IdentityPoolTags:
+        - Key: purpose
+          Value: agentcore-memory
+
+Outputs:
+  UserPoolId:
+    Description: The user pool ID.
+    Value: !Ref UserPool
+  ClientId:
+    Description: The public terminal client ID (no secret).
+    Value: !Ref TerminalClient
+  Domain:
+    Description: The host of the classic hosted page.
+    Value: !Sub ${Project}-memory-${Stage}.auth.${AWS::Region}.amazoncognito.com
+  IdentityPoolId:
+    Description: The identity pool ID. The person roles import it as the exact aud of their trust.
+    Value: !Ref IdentityPool
+    Export:
+      Name: !Sub ${Project}-memory-identity-${Stage}:IdentityPoolId
+  ProviderName:
+    Description: The Logins key of the user pool for GetId and GetOpenIdToken.
+    Value: !GetAtt UserPool.ProviderName

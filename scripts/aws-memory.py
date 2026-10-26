@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STAGES = ("dev", "test", "prod")
 ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+")
+IDENTITY = re.compile(r"([a-z]{2}(?:-[a-z]+)+-[0-9]+):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+COGNITO = "cognito-identity.amazonaws.com"
 KEY = "bedrock-agentcore:namespace"
 READ = ["bedrock-agentcore:RetrieveMemoryRecords", "bedrock-agentcore:ListMemoryRecords"]
 MUTATIONS = {"write": "BatchCreateMemoryRecords", "move": "BatchUpdateMemoryRecords", "delete": "BatchDeleteMemoryRecords"}
@@ -103,7 +105,7 @@ def validate_config(value, stage):
     people, pins, active = set(), set(), set()
     for index, person in enumerate(sequence(value["people"], "people")):
         field = f"people[{index}]"
-        fields(person, ("actorId", "pin", "status"), field)
+        fields(person, ("actorId", "pin", "status"), field, ("iamUser",))
         actor = identifier(person["actorId"], field + ".actorId")
         if actor in people:
             refuse(field + ".actorId", "must be unique")
@@ -116,6 +118,8 @@ def validate_config(value, stage):
         pins.add(pin)
         if person["status"] not in ("active", "offboarded"):
             refuse(field + ".status", "must be active or offboarded")
+        if type(person.get("iamUser", True)) is not bool:
+            refuse(field + ".iamUser", "must be a boolean")
         if person["status"] == "active":
             active.add(actor)
     projects = set()
@@ -159,13 +163,68 @@ def validate_config(value, stage):
     return config
 
 
-def load_config(stage, root=ROOT):
-    path = root / "config" / "memory" / f"{stage}.yaml"
+def bind_identities(config, overlay):
+    """Merge the ignored identity overlay of a stage: one Cognito identity ID per bound person.
+
+    Only the bound render calls this. The tracked render has no identity, so there a person
+    with iamUser: false gets no user and no role. Refusals name people, never an identity ID.
+    """
+    config = copy.deepcopy(config)
+    people = {person["actorId"]: person for person in config["people"]}
+    fields(overlay, ("schemaVersion", "stage", "identities"), "identities")
+    if type(overlay["schemaVersion"]) is not int or overlay["schemaVersion"] != 1:
+        refuse("identities.schemaVersion", "must be the integer 1")
+    if overlay["stage"] != config["stage"]:
+        refuse("identities.stage", "must match the selected stage")
+    if not isinstance(overlay["identities"], dict):
+        refuse("identities.identities", "must be a mapping from actorId to identity ID")
+    owners = {}
+    for actor, value in sorted(overlay["identities"].items()):
+        field = "identities." + identifier(actor, "identities.actorId")
+        if actor not in people:
+            refuse(field, "must name a person of the stage file")
+        if people[actor]["status"] != "active":
+            refuse(field, "must name an active person, not an offboarded one")
+        match = IDENTITY.fullmatch(value) if isinstance(value, str) else None
+        if not match:
+            refuse(field, "must have the form <region>:<uuid> with a lowercase uuid")
+        if match.group(1) != config["region"]:
+            refuse(field, "must be in the region of the stage")
+        if value in owners:
+            refuse(field, f"shares one identity with {owners[value]}")
+        owners[value] = actor
+        people[actor]["identityId"] = value
+    for person in config["people"]:
+        if person["status"] == "active" and not person.get("iamUser", True) and "identityId" not in person:
+            refuse(f"people.{person['actorId']}.iamUser", "false needs an identity in the overlay, or the person has no access")
+    return config
+
+
+def identities_path(stage, root=None):
+    return (root or ROOT) / ".local" / "memory" / f"{stage}.identities.yaml"
+
+
+def bound_template_path(stage, root=None):
+    return (root or ROOT) / ".local" / "memory" / f"aws-memory-{stage}.cfn.yaml"
+
+
+def read_yaml(path, field):
     try:
-        value = yaml.load(path.read_text(encoding="utf-8"), Loader=ConfigLoader)
+        if path.is_symlink():
+            raise OSError
+        return yaml.load(path.read_text(encoding="utf-8"), Loader=ConfigLoader)
     except (OSError, UnicodeError, yaml.YAMLError):
-        refuse(f"config/memory/{stage}.yaml", "must be readable, valid YAML")
-    return validate_config(value, stage)
+        refuse(field, "must be readable, valid YAML and no symbolic link")
+
+
+def load_config(stage, root=None, identities=None):
+    """Load the tracked stage file; with an overlay path, merge its identities too."""
+    value = read_yaml((root or ROOT) / "config" / "memory" / f"{stage}.yaml", f"config/memory/{stage}.yaml")
+    config = validate_config(value, stage)
+    if identities is None:
+        return config
+    # An empty overlay file gives None, which fields() refuses like any other invalid overlay.
+    return bind_identities(config, read_yaml(identities, f".local/memory/{stage}.identities.yaml"))
 
 
 def active_person(config, actor):
@@ -271,9 +330,12 @@ def project_limit(config):
     for person in config["people"]:
         if person["status"] != "active":
             continue
-        available = 64 - len(f"-memory-{config['stage']}-person-{person['actorId']}")
+        # The role name adds the suffix -role; only a bound person has a role.
+        suffix = "-role" if "identityId" in person else ""
+        available = 64 - len(f"-memory-{config['stage']}-person-{person['actorId']}{suffix}")
         if available < len("tenant-ec2"):
-            refuse(f"people.{person['actorId']}.actorId", "the IAM user name exceeds 64 characters with the default Project")
+            kind = "role" if suffix else "user"
+            refuse(f"people.{person['actorId']}.actorId", f"the IAM {kind} name exceeds 64 characters with the default Project")
         limit = min(limit, available)
     return limit
 
@@ -396,6 +458,16 @@ def user_name(suffix):
     return sub("${Project}-memory-${Stage}-" + suffix)
 
 
+def role_trust(identity):
+    """One statement: the basic-flow web identity of exactly one bound person (spike 127 shape)."""
+    pool = {"Fn::ImportValue": sub("${Project}-memory-identity-${Stage}:IdentityPoolId")}
+    return {"Version": "2012-10-17", "Statement": [{
+        "Sid": "CognitoIdentity", "Effect": "Allow", "Principal": {"Federated": COGNITO},
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {"StringEquals": {COGNITO + ":aud": pool, COGNITO + ":sub": identity},
+                      "ForAnyValue:StringEquals": {COGNITO + ":amr": "authenticated"}}}]}
+
+
 def template(config, check_policies=True):
     stage = config["stage"]
     resources = {}
@@ -417,7 +489,7 @@ def template(config, check_policies=True):
     resources["Boundary"] = {"Type": "AWS::IAM::ManagedPolicy", "Properties": {
         "ManagedPolicyName": sub("${Project}-memory-${Stage}-boundary"),
         "Description": "The permission ceiling for the users of this memory stage.", "PolicyDocument": boundary(config)}}
-    people = []
+    people, roles = [], []
     principals = [sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:root"),
                   sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AdministratorRole}"),
                   {"Fn::If": ["HasAdministratorUser", sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:user/${AdministratorUser}"),
@@ -428,18 +500,31 @@ def template(config, check_policies=True):
         actor = person["actorId"]
         logical_id = person_logical_id(actor)
         policy = person_policy(config, actor) if check_policies else policy_document(config, person_scope(config, actor), actor)
-        resources[logical_id] = {"Type": "AWS::IAM::User", "Properties": {
-            "UserName": user_name("person-" + actor), "PermissionsBoundary": ref("Boundary"),
-            "Policies": [{"PolicyName": "agentcore-memory", "PolicyDocument": policy}],
-            "Tags": [{"Key": "purpose", "Value": "agentcore-memory"}, {"Key": "actorId", "Value": actor},
-                     {"Key": "pin", "Value": person["pin"]}, {"Key": "Stage", "Value": ref("Stage")}]}}
-        people.append(ref(logical_id))
-        principals.append(att(logical_id, "Arn"))
+        person_tags = [{"Key": "purpose", "Value": "agentcore-memory"}, {"Key": "actorId", "Value": actor},
+                       {"Key": "pin", "Value": person["pin"]}, {"Key": "Stage", "Value": ref("Stage")}]
+        if person.get("iamUser", True):
+            resources[logical_id] = {"Type": "AWS::IAM::User", "Properties": {
+                "UserName": user_name("person-" + actor), "PermissionsBoundary": ref("Boundary"),
+                "Policies": [{"PolicyName": "agentcore-memory", "PolicyDocument": policy}], "Tags": person_tags}}
+            people.append(ref(logical_id))
+            principals.append(att(logical_id, "Arn"))
+        if "identityId" in person:
+            resources[logical_id + "Role"] = {"Type": "AWS::IAM::Role", "Properties": {
+                "RoleName": user_name("person-" + actor + "-role"), "PermissionsBoundary": ref("Boundary"),
+                "Description": "The person role of one bound Cognito identity.", "MaxSessionDuration": 3600,
+                "AssumeRolePolicyDocument": role_trust(person["identityId"]),
+                "Policies": [{"PolicyName": "agentcore-memory", "PolicyDocument": copy.deepcopy(policy)}],
+                "Tags": copy.deepcopy(person_tags)}}
+            roles.append(ref(logical_id + "Role"))
+            principals.append(att(logical_id + "Role", "Arn"))
     outputs = {"MemoryId": {"Description": "The identifier of the memory.", "Value": att("Memory", "MemoryId")},
                "MemoryArn": {"Description": "The ARN of the memory.", "Value": att("Memory", "MemoryArn")},
                "BoundaryArn": {"Description": "The ARN of the permission ceiling.", "Value": ref("Boundary")},
                "PersonUsers": {"Description": "The active person user names, separated by commas.",
                                "Value": {"Fn::Join": [",", people]} if people else ""}}
+    if roles:
+        outputs["PersonRoles"] = {"Description": "The bound person role names, separated by commas.",
+                                  "Value": {"Fn::Join": [",", roles]}}
     for kind, switch in (("submit", "submit"), ("worker", "workerRead")):
         label = kind.capitalize()
         output = {"Description": f"The {kind} user name, or empty when disabled.", "Value": ""}
@@ -490,8 +575,15 @@ class TemplateDumper(yaml.SafeDumper):
         return True
 
 
+def bound(config):
+    return any("identityId" in person for person in config["people"])
+
+
 def serialize_template(config, document):
-    header = f"# Generated by scripts/aws-memory.py from config/memory/{config['stage']}.yaml. Do not edit.\n"
+    source = f"config/memory/{config['stage']}.yaml"
+    if bound(config):
+        source += f" and .local/memory/{config['stage']}.identities.yaml"
+    header = f"# Generated by scripts/aws-memory.py from {source}. Do not edit.\n"
     return header + HEADER_NOTE + yaml.dump(document, Dumper=TemplateDumper, sort_keys=True, allow_unicode=False, width=120)
 
 
@@ -510,7 +602,10 @@ def render(config):
                 low = count
             else:
                 high = count - 1
-        refuse("template", f"must be at most {TEMPLATE_LIMIT} bytes; {len(text.encode('utf-8'))} bytes; {low} active people fit in sorted actor order")
+        users = sum(1 for p in active[:low] if p.get("iamUser", True))
+        roles = sum(1 for p in active[:low] if "identityId" in p)
+        refuse("template", f"must be at most {TEMPLATE_LIMIT} bytes; {len(text.encode('utf-8'))} bytes; {low} active people fit "
+               f"in sorted actor order ({users} users and {roles} roles)")
     return text
 
 
@@ -533,15 +628,31 @@ def main(argv=None):
     try:
         config = load_config(args.stage)
         if args.command in ("render", "check"):
-            text = render(config)
-            path = ROOT / "scripts" / f"aws-memory-{args.stage}.cfn.yaml"
-            if args.command == "render":
-                path.write_text(text, encoding="utf-8")
-                print(f"memory render {args.stage}: pass ({len(text.encode('utf-8'))} bytes)")
-            else:
-                if not path.is_file() or path.read_bytes() != text.encode("utf-8"):
-                    refuse(f"scripts/aws-memory-{args.stage}.cfn.yaml", "differs from the configuration; run render")
-                print(f"memory check {args.stage}: pass")
+            # The tracked template never holds an identity. A bound copy goes to the ignored .local/memory/.
+            targets = [(render(config), ROOT / "scripts" / f"aws-memory-{args.stage}.cfn.yaml",
+                        f"scripts/aws-memory-{args.stage}.cfn.yaml")]
+            overlay = identities_path(args.stage)
+            if overlay.exists() or overlay.is_symlink():
+                bound_config = load_config(args.stage, identities=overlay)
+                targets.append((render(bound_config), bound_template_path(args.stage),
+                                f".local/memory/aws-memory-{args.stage}.cfn.yaml"))
+            for text, path, label in targets:
+                if args.command == "render":
+                    if path.parent != ROOT / "scripts":
+                        for directory in (path.parent.parent, path.parent):
+                            if directory.is_symlink():
+                                refuse(label, "the directory must not be a symbolic link")
+                            directory.mkdir(mode=0o700, exist_ok=True)
+                        if path.is_symlink():
+                            refuse(label, "must not be a symbolic link")
+                        path.touch(mode=0o600)
+                        path.chmod(0o600)
+                    path.write_text(text, encoding="utf-8")
+                    print(f"memory render {args.stage}: pass ({len(text.encode('utf-8'))} bytes, {label})")
+                elif path.is_symlink() or not path.is_file() or path.read_bytes() != text.encode("utf-8"):
+                    refuse(label, "differs from the configuration; run render")
+            if args.command == "check":
+                print(f"memory check {args.stage}: pass" + (" (with the identity overlay)" if len(targets) > 1 else ""))
         else:
             if args.command == "policy":
                 document = person_policy(config, args.actor)

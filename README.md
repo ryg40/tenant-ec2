@@ -53,7 +53,7 @@ Separate [memory stacks](docs/memory-stack.md) give each stage its own AgentCore
 
 | Option | Switch | Page |
 | --- | --- | --- |
-| Pangolin edge | Add `pangolin` to `EC2_OPTIONS`. It replaces the core edge and needs `EC2_DNS_PROVIDER=porkbun`. | [Pangolin](docs/options/pangolin.md) |
+| Pangolin edge | Add `pangolin` to `EC2_OPTIONS`. It replaces the core edge and needs `EC2_DNS_PROVIDER=porkbun` or `cloudflare`. | [Pangolin](docs/options/pangolin.md) |
 | Copilot model routes | Add `copilot` to `EC2_OPTIONS`. | [Copilot](docs/options/copilot.md) |
 | DNS provider | Set `EC2_DNS_PROVIDER` to `manual`, `porkbun`, `route53` or `cloudflare`. The default is `manual`. | [DNS](docs/options/dns.md) |
 | Home lab tools | Optional Newt site, web search, credential stores and private kit sources. | [Home lab](docs/options/home-lab.md) |

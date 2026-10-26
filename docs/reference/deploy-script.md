@@ -15,6 +15,9 @@ scripts/aws-host.sh --help
 | --- | --- |
 | `secret` | Reads the environment file on stdin and writes the JSON secret `tenant-ec2/env`. |
 | `deploy` | Creates or updates the stack from `scripts/aws-host.cfn.yaml`. |
+| `deploy --replace-instance --step 1\|2 --prepare` and `--execute <name>` | Replaces the instance in two change sets, each with a prepare run and an execute run. See [Instance replacement in two steps](#instance-replacement-in-two-steps). |
+| `current-image` | Prints the image id of the running instance as `EC2_AMI_ID=<id>`. `--write` sets it in the environment file. |
+| `new-image` | Prints the image id of `EC2_AMI_SSM_PARAMETER` as `EC2_AMI_ID=<id>`. `--write` sets it in the environment file. |
 | `outputs` | Prints stack outputs as `NAME=value`. `--write` updates supported output names in the environment file. |
 | `dns` | Prints or sets the selected A records through `scripts/dns-records.sh`. |
 | `dns --plan` | Reads the Elastic IP from the stack and prints the record set. It changes nothing and calls no provider. |
@@ -81,9 +84,11 @@ The same file is the source of the secret, and the host reads the same names fro
 | `EC2_DNS_PROVIDER` | `manual` | Selects `manual`, `porkbun`, `route53` or `cloudflare`. |
 | `EC2_EDGE_NAMES` | `ok` | Selects names from `ok`, `agent`, `llm` and `ov`, separated by commas with no blanks. |
 | `EC2_BEDROCK_EMBED_MODEL` | `amazon.titan-embed-text-v2:0` | Sets template parameter `BedrockEmbedModel`. |
+| `EC2_AMI_ID` | Empty | Sets the pinned image `AmiId`. `deploy` refuses an empty value. |
+| `EC2_AMI_SSM_PARAMETER` | The public Amazon Linux 2023 x86_64 parameter | Only `new-image` reads it. |
 
-The Pangolin option sets `EnablePangolin=true` and requires the Porkbun provider.
-Each command stops when `EC2_OPTIONS` holds `pangolin` and `EC2_DNS_PROVIDER` is not `porkbun`.
+The Pangolin option sets `EnablePangolin=true` and requires the provider `porkbun` or `cloudflare`.
+Each command stops when `EC2_OPTIONS` holds `pangolin` and `EC2_DNS_PROVIDER` is neither `porkbun` nor `cloudflare`.
 Other options do not open the tunnel ports.
 A change of `EC2_OPTIONS` needs `deploy` for the security group, then `secret` and a new run of the bootstrap for the host.
 See the [option index](../options/README.md).
@@ -97,15 +102,15 @@ scripts/aws-host.sh secret < .env
 ```
 
 It writes one JSON object with names as keys, including settings.
-It excludes each name of a DNS provider block, except the Porkbun pair when Pangolin needs DNS-01 certificates.
+It excludes each name of a DNS provider block, except the host names of the provider when Pangolin needs DNS-01 certificates: the Porkbun pair, or `EC2_CLOUDFLARE_DNS01_TOKEN`.
 It prints each name that it excludes.
 The user data and bootstrap read this JSON form.
 
 An empty required core name or placeholder stops the command before any write.
 A core name is a name of Part 1 of the sample environment file.
-The same rule applies to empty names in an active option block, and to the Porkbun pair with Pangolin.
+The same rule applies to empty names in an active option block, and to the host names of the provider with Pangolin.
 An inactive option does not require its credentials.
-Only `dns` requires the selected DNS provider block, except for the Porkbun pair with Pangolin.
+Only `dns` requires the selected DNS provider block, except for the host names of the provider with Pangolin.
 
 These names also need a nonempty value:
 
@@ -127,7 +132,7 @@ A placeholder includes `changeme`, `test`, `<your key>`, `${NAME}` or a value co
 The script's `placeholder` function defines the complete list.
 The bootstrap holds the same function, and the check script compares the two.
 `--allow-empty <NAME>` accepts an empty value by its exact name.
-The name must be a name of Part 1, a name of an option block or one name of the Porkbun pair.
+The name must be a name of Part 1, a name of an option block or one host name of a DNS provider: the Porkbun pair or `EC2_CLOUDFLARE_DNS01_TOKEN`.
 The flag accepts no Part 2 setting, including a required Compose or edge setting.
 For a name of an inactive option, the flag changes nothing.
 It accepts an empty value only; a nonempty placeholder still fails.
@@ -188,22 +193,40 @@ The gateway reads the same name from the secret, so keep one value in `.env` for
 It refuses a snapshot URL with a user name or credential before `@`.
 That URL appears in output and arguments, so a private clone must use `EC2_SNAPSHOT_CLONE_TOKEN` instead.
 
+The image is pinned. `deploy` passes `AmiId=$EC2_AMI_ID` and refuses an empty `EC2_AMI_ID`.
+The message names the two ways to fill it:
+
+- `scripts/aws-host.sh current-image --write` reads the image of the running instance with `ec2 describe-instances`. An update with this value replaces nothing for the image. Use it for a stack that exists.
+- `scripts/aws-host.sh new-image --write` reads `EC2_AMI_SSM_PARAMETER` with `ssm get-parameter`. A new value replaces the instance at the next deploy, so the next deploy needs the two steps below.
+
+Without `--write`, each command prints the value and changes no file.
+An update does not read the public image parameter again. So only a new `EC2_AMI_ID`, or another property that needs a replacement, replaces the instance.
+
 An update first creates and prints a change set.
-A `Replacement` value of `True` or `Conditional` counts as a replacement.
+A `Replacement` value of `True` or `Conditional` counts as a replacement, with one exception: `Conditional` on `Instance` whose only changed targets are `UserData` or `Tags`. CloudFormation restarts an instance with an EBS root volume for its user data and does not replace it (the reference of `AWS::EC2::Instance`, `UserData`). The plain `deploy` accepts that change set and prints a warning line about the restart. The user data runs at the first boot only, so a restart does not run the new user data.
 The script deletes and refuses the change set unless you approve each applicable case:
 
-| Guard | Required flag |
-| --- | --- |
-| Replacement of `Instance`. | `deploy --replace-instance` |
-| Removal of `Instance`, `DataVolume`, `FileSystem` or `ElasticIp`. | `deploy --allow-remove` |
-| Replacement of `DataVolume` or `FileSystem`. | `deploy --allow-remove` |
+| Guard | Required flag | Owner words |
+| --- | --- | --- |
+| Replacement of `Instance`. | `deploy --replace-instance --step 1 --prepare`, `--step 1 --execute <name>`, then the same two forms of `--step 2` | Two words for each step: prepare, then execute. |
+| Removal of `Instance`, `DataVolume`, `FileSystem` or `ElasticIp`. | `deploy --allow-remove` | One word. |
+| Replacement of `DataVolume` or `FileSystem`. | `deploy --allow-remove` | One word. |
 
 Each flag accepts only its own case.
 A change set that meets both cases needs both flags.
+`deploy` without `--replace-instance` refuses each change set that replaces `Instance`.
+`deploy --replace-instance` without `--step`, `--prepare` or `--execute` stops before any AWS call and names the four forms.
+The refusal of a replacement names `--step 1 --prepare`. When the stack already has `AttachInstance=false` (step 1 is done), it names `--step 2 --prepare`.
 
-Warning: `--replace-instance` loses every file on the root volume. The Elastic IP, data volume and file system stay.
+The plain `deploy` keeps its one run: it makes the change set, shows it, checks it and executes it.
+This ticket does not change the owner rule for the plain host deploy.
+`--prepare` and `--execute` are options of the two replacement steps only.
 
-A change of the parameter `Domain` alone changes the user data only. It restarts the instance and does not replace it.
+Warning: an instance replacement loses every file on the root volume. The Elastic IP, data volume and file system stay.
+
+A change of the user data alone, for example of `Domain` or `EnableOperations`, does not replace the instance.
+The CloudFormation reference of `UserData` says: with an EBS root volume, an update of the user data restarts the instance ("Some interruptions").
+The user data runs only at the first boot, so the restart does not run it again.
 The [domain move procedure](host-domain-move.md) reads the change set before any stop, and it orders the data volume detach for a replacement.
 
 Warning: `--allow-remove` can detach retained storage from the stack. Replacement storage starts empty even when the old storage stays in the account.
@@ -211,18 +234,134 @@ Warning: `--allow-remove` can detach retained storage from the stack. Replacemen
 Keep `EC2_ENABLE_BUCKET` and `EC2_ENABLE_OPERATIONS` at `false` until the provisioner and boundary have their required rights.
 A deploy with either switch on fails without those rights.
 
+## Instance replacement in two steps
+
+One change set cannot replace the instance.
+CloudFormation makes the new `DataVolumeAttachment` before it deletes the old one, and EC2 refuses it while the old instance holds the volume (proven live on 2026-10-26).
+So `deploy --replace-instance` uses two change sets.
+The template parameter `AttachInstance` (default `true`) is the switch: `false` removes `DataVolumeAttachment` and `ElasticIpAssociation`.
+
+Each step has two runs. Each run has its own owner word:
+
+| Owner word | Command | Result |
+| --- | --- | --- |
+| prepare (step 1) | `scripts/aws-host.sh deploy --replace-instance --step 1 --prepare` | Stops the services, unmounts `/srv/data`, makes the snapshot, then makes and shows the change set of step 1. It stops with the name of the change set and the execute command. |
+| execute (step 1) | `scripts/aws-host.sh deploy --replace-instance --step 1 --execute <name>` | Checks the change set and the unmount again, executes the change set and proves the detach. |
+| prepare (step 2) | `scripts/aws-host.sh deploy --replace-instance --step 2 --prepare` | Makes and shows the change set of step 2. It stops with the name of the change set and the execute command. |
+| execute (step 2) | `scripts/aws-host.sh deploy --replace-instance --step 2 --execute <name>` | Checks the change set again, executes it and proves the new attachments. |
+
+`<name>` is the name that the prepare run prints, for example `awscli-cloudformation-package-deploy-<number>`. An ARN is refused.
+Use the same environment file in the four runs. The printed command names it when it is not `.env`.
+A step without `--prepare` or `--execute` stops before any AWS call and names the four forms.
+
+The dry runs print the same forms:
+
+```sh
+scripts/aws-host.sh --dry-run deploy --replace-instance
+scripts/aws-host.sh --dry-run deploy --replace-instance --step 1 --prepare
+scripts/aws-host.sh --dry-run deploy --replace-instance --step 1 --execute <name>
+scripts/aws-host.sh --dry-run deploy --replace-instance --step 2 --prepare
+scripts/aws-host.sh --dry-run deploy --replace-instance --step 2 --execute <name>
+```
+
+The first dry run prints the four forms. `--step 1` or `--step 2` with no word prints the two forms of that step.
+
+Warning: the site is down from step 1 prepare to the end of the first boot after step 2 execute.
+
+Before step 1, the stack needs the pinned image and the parameter `AttachInstance`.
+For a stack of an older template: run `current-image --write`, then `deploy`. This update replaces nothing for the image.
+Then run `new-image --write`, or change another property that needs a replacement.
+
+### Step 1 prepare: stop, snapshot, change set
+
+| Part | Action | Proof; a failed proof stops the run |
+| --- | --- | --- |
+| 0 | Makes the change set of step 2, shows it and deletes it. | `Instance` has the replacement `True`. With `False` or `Conditional`, the run stops before any change. |
+| a | One `AWS-RunShellScript` command to the old instance: export the host journal with `scripts/host-journal-export.py` to `/srv/data/journal-before-replace/<time>`, `docker compose stop`, `systemctl stop docker.socket docker.service`, `umount /srv/data`. | The status is `Success` and the output has the line `replace: /srv/data is unmounted`. Without it, no snapshot and no change set. A failed `umount` prints the output of `fuser -vm /srv/data`: the processes that hold the mount. |
+| b | `ec2 create-snapshot` of the data volume with the tags `Project`, `Backup` and `Name=<project>-data-before-replace`, then `ec2 wait snapshot-completed`. | The state `completed`. The script runs the wait up to 8 times, about 80 minutes. The state `error` stops the run. |
+| c | A change set from the template of the stack (`get-template`) with `AttachInstance=false`. Each other parameter keeps its value in the stack. | The change set removes `DataVolumeAttachment` and `ElasticIpAssociation` and has no other change. Else the run deletes it and stops. |
+
+The run then stops. The change set waits; nothing is detached.
+The run prints the name of the change set and the command of step 1 execute.
+
+A repeated prepare finds `/srv/data` unmounted at the start: part a prints `replace: /srv/data is not mounted at the start` and makes no journal export.
+In that case part b uses the newest `completed` snapshot of the data volume with the tag `Name=<project>-data-before-replace` again, when it is younger than one hour.
+Else part b makes a new snapshot.
+A repeated prepare after a mount (for example after the recovery below) exports the journal again and makes a new snapshot.
+
+Part c uses the template of the stack, not the file of the checkout. So a change of the checkout cannot reach the old instance in this step.
+Step 1 also removes the address association: the site is already down, and step 2 makes one new association with the new instance.
+Not verified: whether CloudFormation can move the association in one update of `InstanceId`. The documentation says only that the update needs a replacement. The safe choice removes it in step 1.
+
+### Step 1 execute: check and detach
+
+The run checks, in this order, and stops at the first failed check with no execute:
+
+1. The stack has `AttachInstance=true`.
+2. `describe-change-set` of the stack with the name gives the stack name of the stack, the status `CREATE_COMPLETE` and the execution status `AVAILABLE`.
+3. The change set has `AttachInstance=false`.
+4. The change set still removes exactly `DataVolumeAttachment` and `ElasticIpAssociation` and has no other change.
+5. One `AWS-RunShellScript` command proves that `/srv/data` is still unmounted and Docker is not active: the status `Success` and the line `replace: /srv/data is still unmounted`.
+
+The proof of check 5 is a new read on the host, not a record of the prepare run.
+Between the two words, a restart of the old host mounts the volume again by `fstab`, and Docker starts again.
+A file of the prepare run cannot see that; only a new read proves the state at execute time.
+
+Then the run executes the change set and waits for `UPDATE_COMPLETE`.
+After it, the data volume must have no attachment (`ec2 describe-volumes`).
+A refused change set stays. The message names its `delete-change-set` command. After a failed check 5, run step 1 prepare again: it unmounts the volume again and makes a new change set.
+
+### Step 2 prepare: the change set
+
+The stack must have `AttachInstance=false`; else the run stops and names step 1.
+The change set comes from the template of the checkout and the environment file, with `AttachInstance=true`.
+It must replace `Instance` with `True`. It also adds the two attachments.
+A removal of `Instance`, `DataVolume`, `FileSystem` or `ElasticIp`, or a replacement of `DataVolume` or `FileSystem`, needs `--allow-remove`.
+Else the run deletes the change set and stops.
+The run then stops with the name of the change set and the command of step 2 execute.
+
+### Step 2 execute: replace and attach
+
+The run checks the stack (`AttachInstance=false`) and the change set: the stack name, `CREATE_COMPLETE`, `AVAILABLE`, `AttachInstance=true`, the replacement `True` of `Instance`, and no removal or replacement of the data or the address.
+A refused change set stays. Then the run executes the change set.
+After `UPDATE_COMPLETE`, the script proves:
+
+1. The output `InstanceId` is a new instance.
+2. `ec2 describe-volumes`: the data volume is `attached` to the new instance.
+3. `ec2 describe-addresses`: the Elastic IP is on the new instance. The DNS records stay correct.
+
+Then wait for the first boot and the bootstrap, and run `scripts/aws-host.sh verify`.
+The first boot mounts the data volume by its file system. It never formats a volume with a file system.
+
+### A stop in a step
+
+| Stop | State | Next step |
+| --- | --- | --- |
+| Step 1 prepare, part 0 or a | Nothing is changed, or the services are stopped. | One SSM command `mount /srv/data && systemctl start docker.socket docker.service`, then the bootstrap; or run step 1 prepare again. A second run finds the volume unmounted and goes on. |
+| Step 1 prepare, part b or c | The services are stopped; the volume is unmounted and still attached. | The same as above. The snapshot stays. |
+| Between step 1 prepare and step 1 execute | The services are stopped; the change set waits. | Step 1 execute, or the recovery above. After the recovery, delete the waiting change set with the printed command. |
+| Step 1 execute, a failed check | Nothing is executed. The change set stays. | Read the message. Run step 1 prepare again, or the recovery above. |
+| Step 2 prepare or execute, a refusal | The volume and the address are not attached. | `current-image --write`, then `deploy`: it attaches both again to the old instance. Then restart the instance once, so that it mounts `/srv/data` and starts Docker. |
+| Step 2 execute, a failed update | The rollback keeps the old instance; the volume and the address are not attached. | The same as above. |
+
+A waiting change set does not end. Delete each change set that you do not execute.
+
+Not verified: the four runs and the recovery paths on a live stack. The tests of `scripts/test-host-replace.py` use a stub of the AWS CLI.
+Not verified: the journal export ends within its limit of 45 seconds on a host with a long journal. When it fails, part a stops before any service stops.
+Not verified: `fuser` is installed on the host image. When it is not, the failure line says `replace: fuser gives no list`.
+Not verified: the text form of `describe-snapshots` with the query of part b on the live account (the snapshot id, a tab, the start time).
+
 ## Snapshot move guard proposals
 
 The [snapshot move procedure](host-snapshot-move.md) uses a checked clone change and a bootstrap repeat first.
 The current deploy script has these gaps for a snapshot move:
 
 - It does not compare changed snapshot parameters with the installed host commit. An update can finish without installing the new snapshot.
-- `--replace-instance` permits replacement; it does not force it. The flag only sets the guard variable at line 1860 of `scripts/aws-host.sh`.
-- `deploy_update` creates and executes its own change set. After the guards pass, line 1732 executes it without another approval prompt.
-- The guards do not order the old data volume detach before the new attachment. The template uses one `DataVolumeAttachment` for `Instance`.
+- `--replace-instance` permits replacement; it does not force it. Step 1 refuses an update that does not replace the instance, so a snapshot change alone takes no step of it.
+- The plain `deploy` (`deploy_update`) creates and executes its own change set. After the guards pass, it executes the change set without another approval prompt. The two replacement steps have a separate prepare and execute.
 
-Proposed separate changes: refuse snapshot-only updates without an explicit host-move plan; separate change-set creation from execution of its reviewed identity.
-A replacement workflow also needs an explicit replacement trigger, attachment ordering and recovery checks.
+The two steps of `--replace-instance` order the detach of the data volume before the new attachment, with the recovery checks above.
+Proposed separate changes: refuse snapshot-only updates without an explicit host-move plan; separate the change-set creation of the plain deploy from the execution of its reviewed identity.
 These are proposals, not implemented guards. Do not assume that a deploy flag supplies them.
 
 Not verified: a live snapshot update, replacement or recovery under these conditions. A reviewed live procedure must prove each result.
@@ -244,9 +383,9 @@ Both forms read the Elastic IP from the stack, so the stack must exist.
 The core edge gets a certificate for a name only after the name has its A record.
 
 The provider implementations live under `scripts/dns/`.
-A provider credential stays on the development machine unless Pangolin needs its Porkbun pair for DNS-01.
+A provider credential stays on the development machine unless Pangolin needs its host names for DNS-01.
 See [DNS providers](../options/dns.md) for profiles, scopes and provider behavior.
-See [Pangolin](../options/pangolin.md) for the Porkbun request handling and certificate exception.
+See [Pangolin](../options/pangolin.md) for the provider request handling and certificate exception.
 
 ## Verify and dry run
 
@@ -331,7 +470,7 @@ scripts/aws-host.sh --dry-run --env-file .env.example deploy
 
 ## First deploy order
 
-1. Fill `.env`. The [install guide](../install.md) explains the core values.
+1. Fill `.env`. The [install guide](../install.md) explains the core values. Run `scripts/aws-host.sh new-image --write` for `EC2_AMI_ID`.
 2. Run `scripts/aws-host.sh --dry-run deploy`. Check the commands before approval.
 3. Write the secret with the [first-boot exceptions](host-boot.md#environment-file-and-generated-keys). User data needs it before first boot.
 4. Run `scripts/aws-host.sh deploy` after approval. It creates billed resources.

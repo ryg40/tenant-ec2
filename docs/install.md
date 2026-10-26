@@ -135,6 +135,52 @@ Warning: rotating a provisioner key can invalidate older sessions. Check the cre
 
 For optional external credential stores, use [home lab tools](options/home-lab.md).
 
+### The account baseline
+
+The baseline stack blocks the public sharing of EBS snapshots in one region.
+Deploy one stack for each region that the project uses: the home region and each other region of the account.
+The stack name is `bootstrap-tenant-ec2-baseline-<region>`. It is outside the stack scope of the provisioner.
+Do these steps in the administrator session, before step 9, or after a new administrator login.
+
+1. Print the change set command. This step makes no AWS call.
+
+```sh
+scripts/aws-account-baseline.sh deploy --region <region>
+```
+
+2. Prepare the change set after approval. The script shows the change set and stops.
+   If the block is already on in the region, use `import` instead of `deploy` in steps 2 and 3. The import takes the setting into the stack and does not change it.
+
+```sh
+scripts/aws-account-baseline.sh deploy --region <region> --prepare --profile tenant-ec2-admin
+```
+
+3. Execute the change set after a second approval. Use the name that step 2 printed.
+
+```sh
+scripts/aws-account-baseline.sh deploy --region <region> --execute <change-set-name> --profile tenant-ec2-admin
+```
+
+4. Check the region. The last line must be `check: pass`.
+
+```sh
+scripts/aws-account-baseline.sh check --region <region> --profile tenant-ec2-admin
+```
+
+5. Do steps 2 to 4 again for each other region in use.
+
+The S3 account public access block has no CloudFormation resource type. Set it with one call:
+
+```sh
+aws s3control put-public-access-block --account-id <account-id> --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true --profile tenant-ec2-admin
+```
+
+Proof: `aws s3control get-public-access-block --account-id <account-id> --profile tenant-ec2-admin` gives `true` for all four settings.
+
+Warning: a delete of the baseline stack keeps the snapshot block on. Turn the block off only with an explicit decision.
+
+Not verified: a live deploy or import of the baseline stack. The script tests its steps with a stub of the AWS CLI only.
+
 ## 3. Prepare the environment file
 
 The development copy of `.env` supplies the secret.
@@ -180,6 +226,7 @@ ssh-keygen -t ed25519 -f "$HOME/.ssh/tenant-ec2"
 | `EC2_SNAPSHOT_REPOSITORY` | The approved HTTPS clone URL without a credential. |
 | `EC2_SNAPSHOT_TAG` | The approved portable tag. |
 | `EC2_SNAPSHOT_COMMIT` | Its exact 40-digit commit. |
+| `EC2_AMI_ID` | The pinned image id. For a first deploy, `scripts/aws-host.sh new-image --write` sets the newest Amazon Linux 2023 image. |
 | `EC2_PI_DURABLE_MODEL` | `bedrock/luna`. |
 | `EC2_PI_DURABLE_THINKING` | `xhigh`. |
 | `EC2_OPENVIKING_EMBED_MODEL` | `bedrock/embed`. |
@@ -199,6 +246,7 @@ For an older environment file, compare every name with `.env.example` before wri
 Add `EC2_OPTIONS`, `EC2_DNS_PROVIDER`, `EC2_EDGE_NAMES`, `EC2_BEDROCK_EMBED_MODEL` and `EC2_PI_DURABLE_WEB_SEARCH`.
 Add `EC2_OPENVIKING_EMBED_MODEL`, `EC2_OPENVIKING_VLM_MODEL` and `EC2_OPENVIKING_EMBED_DIMENSION`.
 Add `EC2_OK_ENTRA_TENANT_ID`, `EC2_OK_ENTRA_GROUP_ID`, `EC2_OK_OIDC_CLIENT_ID`, `EC2_OK_OIDC_CLIENT_SECRET` and `EC2_OK_COOKIE_SECRET`.
+Add `EC2_AMI_ID`. For a stack that exists, run `scripts/aws-host.sh current-image --write`: it writes the image of the running instance, so the next update replaces nothing for the image.
 The `secret` command stops before a write with one message that names each missing required name.
 It also tests each nonempty form with the same tests as bootstrap step 2, before writing its JSON file or calling AWS.
 A wrong form stops both `secret` and the bootstrap dry run with a nonzero status.

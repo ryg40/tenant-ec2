@@ -29,10 +29,12 @@ log:
 certificatesResolvers:
   letsencrypt:
     acme:
-      # The DNS-01 challenge through Porkbun. The provider reads PORKBUN_API_KEY and
-      # PORKBUN_SECRET_API_KEY from the container environment (compose.pangolin.yaml).
+      # The DNS-01 challenge through the provider of EC2_DNS_PROVIDER: porkbun or
+      # cloudflare. The provider reads its credential from the container environment
+      # (compose.pangolin.yaml): PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY, or
+      # CF_DNS_API_TOKEN and CF_ZONE_API_TOKEN.
       dnsChallenge:
-        provider: "porkbun"
+        provider: "${EC2_DNS_PROVIDER}"
       email: "${EC2_ACME_EMAIL}"
       storage: "/letsencrypt/acme.json"
       caServer: "https://acme-v02.api.letsencrypt.org/directory"

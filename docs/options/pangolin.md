@@ -4,8 +4,8 @@
 
 Pangolin replaces the core edge; it does not run beside Caddy.
 Set `EC2_OPTIONS=pangolin`, or add `pangolin` to a list that already contains `copilot`.
-Set `EC2_DNS_PROVIDER=porkbun`.
-Pangolin currently needs Porkbun for its DNS-01 wildcard certificate.
+Set `EC2_DNS_PROVIDER=porkbun` or `EC2_DNS_PROVIDER=cloudflare`: the provider that answers for the apex domain.
+Traefik gets the DNS-01 wildcard certificate through that provider.
 
 The overlay `compose.pangolin.yaml` adds `pangolin`, `gerbil` and `traefik`.
 Gerbil publishes 80, 443, 51820/udp and 21820/udp.
@@ -35,14 +35,15 @@ The renderer writes the result below `/srv/data/pangolin` before the bootstrap s
 
 Each edge service mounts only its own directory.
 The renderer writes no secret into these files.
-Compose supplies the Pangolin secret to `pangolin` and the Porkbun pair to `traefik`.
+Compose supplies the Pangolin secret to `pangolin` and the credential of the DNS provider to `traefik`.
+The renderer writes `EC2_DNS_PROVIDER` as the `provider` of the resolver in the Traefik file.
 
 ## Names, gates and DNS
 
 `EC2_EDGE_NAMES` selects the blueprint resources. The sample value is `ok`; with Pangolin, an empty value stops the render.
 The DNS record set adds `pangolin` for the dashboard.
 The domain subtree has the form `<label>.<domain>`.
-Porkbun manages records in the parent domain's zone.
+The DNS provider manages records in the parent domain's zone.
 It makes no wildcard DNS record, even though the certificate is a wildcard certificate.
 
 The dashboard answers only `EC2_ADMIN_CIDR`.
@@ -61,14 +62,24 @@ A correct record causes no write.
 A reply without a record list stops the command.
 
 This option is the exception to the DNS credential rule.
-Its Porkbun pair also enters the host secret because Traefik needs DNS-01 at certificate renewal.
-Use credentials scoped to the required domain.
+The host credential of its DNS provider also enters the host secret because Traefik needs DNS-01 at certificate renewal.
+
+| Provider | Host names | Names that Traefik reads | Scope |
+| --- | --- | --- | --- |
+| `porkbun` | `EC2_PORKBUN_API_KEY`, `EC2_PORKBUN_SECRET_KEY` | `PORKBUN_API_KEY`, `PORKBUN_SECRET_API_KEY` | The whole Porkbun domain. |
+| `cloudflare` | `EC2_CLOUDFLARE_DNS01_TOKEN` | `CF_DNS_API_TOKEN`, `CF_ZONE_API_TOKEN` | One zone; permissions Zone Read and DNS Edit. |
+
+With `cloudflare`, `EC2_CLOUDFLARE_API_TOKEN` and `EC2_CLOUDFLARE_ZONE_ID` stay on the development machine for the `dns` command.
+The host token is a new token for the host only.
+The page [DNS providers](dns.md#the-option-pangolin) gives the steps to make it.
+
+Warning: a DNS key on the public host can change the records of its zone. Give it the smallest scope: one domain at Porkbun, one zone at Cloudflare.
 
 ## Select before a deploy
 
 1. Set `EC2_OPTIONS` in `.env` to include `pangolin`. The bootstrap selects the Pangolin overlay instead of Caddy.
-2. Set `EC2_DNS_PROVIDER=porkbun`. Other providers do not satisfy the current certificate configuration.
-3. Fill the Pangolin and Porkbun blocks in `.env`. Keep the integration API key empty until initial setup.
+2. Set `EC2_DNS_PROVIDER` to `porkbun` or `cloudflare`. Other providers do not satisfy the certificate configuration.
+3. Fill the Pangolin block and the host names of the provider in `.env`. Keep the integration API key empty until initial setup.
 4. Set `EC2_ACME_EMAIL` and `EC2_ADMIN_CIDR`. The renderer requires a certificate contact and an administrator range.
 5. Review the selected names in `EC2_EDGE_NAMES`. Only those resources must be enabled.
 6. Run the renderer dry run. It checks the edge values without writing rendered files.

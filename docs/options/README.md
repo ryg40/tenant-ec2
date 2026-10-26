@@ -13,7 +13,7 @@ An unknown name stops the scripts.
 
 | Option | Switch | Purpose |
 | --- | --- | --- |
-| [Pangolin](pangolin.md) | `EC2_OPTIONS=pangolin` | Replaces Caddy with Pangolin, Gerbil and Traefik. Adds tunnel ports and a blueprint. Needs Porkbun for its certificate. |
+| [Pangolin](pangolin.md) | `EC2_OPTIONS=pangolin` | Replaces Caddy with Pangolin, Gerbil and Traefik. Adds tunnel ports and a blueprint. Needs Porkbun or Cloudflare for its certificate. |
 | [Copilot](copilot.md) | `EC2_OPTIONS=copilot` | Adds the Copilot service and the `copilot/luna` and `copilot/embed` routes. |
 | Both | `EC2_OPTIONS=pangolin,copilot` | Selects both overlays without editing Compose files. |
 | [DNS provider](dns.md) | `EC2_DNS_PROVIDER` | `manual` prints the records; `porkbun`, `route53` and `cloudflare` manage them. |
@@ -47,7 +47,7 @@ The sample environment file groups values by purpose:
 | `# ----- Option pangolin -----` | Empty names are required only when Pangolin is selected. |
 | `# ----- Option copilot -----` | Empty names are required only when Copilot is selected. |
 | `# ----- DNS provider porkbun -----` | Read by `dns` for Porkbun. Also sent to the host only when Pangolin needs DNS-01. |
-| `# ----- DNS provider cloudflare -----` | Read by `dns` for Cloudflare; kept off the host. |
+| `# ----- DNS provider cloudflare -----` | Read by `dns` for Cloudflare; kept off the host. With Pangolin and `cloudflare`, only `EC2_CLOUDFLARE_DNS01_TOKEN` goes to the host. |
 | `# ----- DNS provider route53 -----` | Read by `dns` for Route 53; kept off the host. |
 
 The [deploy reference](../reference/deploy-script.md) explains secret filtering.

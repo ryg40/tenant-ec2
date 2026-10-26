@@ -15,7 +15,7 @@ The head of the template gives its detailed rules.
 | --- | --- | --- |
 | `Project` | `tenant-ec2` | The prefix of the role, instance profile, key pair, secret and log group. |
 | `InstanceType` | `t3a.large` | The instance type. Use `m7i-flex.xlarge` when a build needs more memory. |
-| `AmiParameter` | The Amazon Linux 2023 x86_64 parameter | The public SSM parameter that gives the image id. |
+| `AmiId` | None | The pinned Amazon Linux 2023 x86_64 image id (`EC2_AMI_ID`). A new value replaces the instance: use the [two steps](deploy-script.md#instance-replacement-in-two-steps). |
 | `VpcCidr` | None | The private IPv4 range of the VPC. Do not change it after the first deploy. |
 | `AdminCidr` | None | The IPv4 range that reaches SSH and selected core edge resources other than `ok`. The prefix length is 16 to 32. |
 | `SshPublicKey` | None | The public key of the new key pair of the host. |
@@ -28,6 +28,7 @@ The head of the template gives its detailed rules.
 | `BedrockEmbedModel` | `amazon.titan-embed-text-v2:0` | The Bedrock embedding model for the gateway. |
 | `EnableBucket` | `false` | Makes the private bucket, its policy and the bucket rights of the instance role. |
 | `EnableOperations` | `false` | Makes the daily snapshot policy of the data volume, the log group, the billing alarm and its topic. |
+| `AttachInstance` | `true` | `false` removes `DataVolumeAttachment` and `ElasticIpAssociation`. Only step 1 of `deploy --replace-instance` sets it. |
 | `AlarmEmail` | Empty | The billing alarm address. It is required with `EnableOperations=true`. |
 | `AlarmThreshold` | `100` | The billing alarm limit in USD. |
 
@@ -102,7 +103,11 @@ After such an update, set `EC2_ENABLE_OPERATIONS` in the stack values file of th
 - The provisioner has no right to upload a template object. So each template stays below 51200 bytes.
 - CloudFormation owns the retention of 14 days of the log group.
 - The billing metric and its topic use `us-east-1`. A billing alarm is not a spending limit. Its metric can arrive hours after a charge.
-- A snapshot is crash-consistent. It is not an application-consistent backup of a database. The kit has no EFS backup.
+- A snapshot is crash-consistent. It is not an application-consistent backup of a database.
+- `FileSystem` sets `BackupPolicy: Status: ENABLED`: the automatic backup of EFS. AWS Backup makes a daily backup with a 35-day retention in the vault `aws/efs/automatic-backup-vault`. The service makes and manages that vault and its plan, not the template. A change of `BackupPolicy` needs no replacement.
+- The stack update calls `elasticfilesystem:PutBackupPolicy` with the provisioner key. The statement `Compute` of the provisioner policy allows `elasticfilesystem:*` in the allowed regions, so the provisioner template needs no change.
+- Proof after the deploy: `aws efs describe-backup-policy --file-system-id <file-system-id> --query BackupPolicy.Status` gives `ENABLED` (or `ENABLING` at first). After the first daily backup, `aws backup list-recovery-points-by-resource --resource-arn <file-system-arn> --query 'length(RecoveryPoints)'` gives at least 1.
+- Not verified: the backup window of the default plan; the documentation names only a daily backup.
 
 ## First boot
 
@@ -130,8 +135,7 @@ No live deploy proves the following claims.
 
 - Not verified: the private portable snapshot clone works through the credential helper. The JSON secret needs `EC2_SNAPSHOT_CLONE_TOKEN` before first boot.
 - Not verified: an instance restart does not run user data again. A new `SnapshotTag` then needs a replacement instance or a manual run.
-- Not verified: an instance replacement can fail when the old instance still holds the data volume attachment.
-- Not verified: a stack update reads `AmiParameter` again, so a new Amazon Linux image can replace the instance. The deploy script shows the change set.
+- Not verified: the two steps of an instance replacement on a live stack. A replacement in one change set fails when the old instance still holds the data volume (proven live on 2026-10-26), so the deploy script uses two change sets.
 - Not verified: EFS accepts the file system policy at create time and the host mounts each access point under it.
 - Not verified: the IAM limits on a live account, a daily snapshot, its deletion after seven days and a restore from a snapshot.
 - Not verified: the billing alerts preference of the account is on, and the e-mail subscription of the topic is confirmed.

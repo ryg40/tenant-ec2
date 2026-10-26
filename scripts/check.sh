@@ -29,6 +29,8 @@
 #                         Skip when the renderer or stage files are absent.
 #   2b. memory stack      scripts/test-memory-stack.py: schema, policy and template tests.
 #   2c. memory deploy     scripts/test-memory-deploy.py: offline deploy and key stubs.
+#   2d. memory signin     scripts/test-memory-signin.py: the sign-in helper with stub
+#                         Cognito, token endpoint and STS.
 #                         Each test step skips when its script is absent.
 #   3. shellcheck         each shell script. The first line gives the dialect.
 #                         A file of scripts/git-hooks/ has the dialect sh: the
@@ -263,9 +265,11 @@
 #                           commands pass when a service that the bootstrap
 #                           starts does not run.
 #  10. self-tests         the self-test of each script that has one, with its
-#                         own fixtures and stubs. Ten lines:
+#                         own fixtures and stubs. Twelve lines:
 #                         selftest   scripts/aws-provisioner.sh,
+#                                    scripts/aws-account-baseline.sh,
 #                                    scripts/entra-app.sh,
+#                                    scripts/entra-memory-app.sh,
 #                                    scripts/build-diagrams.py,
 #                                    scripts/dns-migration.py and
 #                                    scripts/build-architecture-html.py
@@ -305,6 +309,8 @@
 #                                    CHECK_NO_LOCAL_RUN=1 (the hook sets it).
 #  11. operations         scripts/test-operations.py: offline template and IAM limits,
 #                         journal export, cursor recovery, rotation and agent files
+#  11b. host replace     scripts/test-host-replace.py: the pinned image and the two
+#                         steps of the instance replacement with a stub of the AWS CLI
 #  12. storage            scripts/test-storage.py: durable startup, systemd syntax and
 #                         EFS/Git ownership in isolated fixtures; needs systemd tools
 #                         and root for the numeric ownership fixture
@@ -314,7 +320,7 @@
 #                         verifier checks the services of that file set only
 #  14. publish            development publish tests when present; absent in runtime exports
 #  15. scan               scripts/scan.sh tree (docs/secret-handling.md)
-# Each of the four test lines 11 to 14 gives a skip line when its test file is
+# Each of the five test lines 11 to 14 gives a skip line when its test file is
 # not in the copy.
 #
 # A kind of file that does not exist yet gives a skip line. The script uses no
@@ -405,6 +411,7 @@ this script:
                      skip when the renderer or stage files are absent
   memory stack       python3 scripts/test-memory-stack.py: schema and policy tests
   memory deploy      python3 scripts/test-memory-deploy.py: offline administration tests
+  memory signin      python3 scripts/test-memory-signin.py: sign-in helper tests with stubs
   shellcheck         each *.sh; under scripts/, each file with the first line
                      #!/bin/sh or #!/bin/bash; each file of scripts/git-hooks/
   compose            each file set of the contract as one Compose model, with
@@ -448,7 +455,8 @@ this script:
                      the necessary names and on the services, with and with
                      no pin of the agent kit
   selftest           the self-test of scripts/aws-provisioner.sh, of
-                     scripts/entra-app.sh, of scripts/security-review.sh, of
+                     scripts/aws-account-baseline.sh, of scripts/entra-app.sh, of scripts/entra-memory-app.sh,
+                     of scripts/security-review.sh, of
                      scripts/build-diagrams.py, of scripts/dns-migration.py,
                      of scripts/build-architecture-html.py and of
                      scripts/archify-aws-look.py
@@ -463,6 +471,7 @@ this script:
   local run          the local run of the gate with a stub in place of Entra ID;
                      skip with CHECK_NO_LOCAL_RUN=1
   operations         offline operations, IAM and journal-export regressions
+  host replace       offline pinned image and two-step instance replacement regressions
   storage            offline startup, systemd and Git ownership regressions
   verifier           offline deployed-service verifier regressions, for each file
                      set of the contract
@@ -1830,6 +1839,22 @@ dry_run_check() {
     dry_expect dry-cloudflare 'dns_records?type=A&name.exact=ok.ec2.check-fixture.test' '-X POST' '-X PATCH'
     dry_expect dry-porkbun dns/retrieveByNameType/ dns/create/ dns/editByNameType/
 
+    # The two steps of the instance replacement: a dry run prints the four forms (prepare
+    # and execute of each step) and each part of step 1, and makes no call. Without
+    # --prepare or --execute, a real run stops.
+    dry_case core-replace /dev/null --env-file "$dry/core.env" deploy --replace-instance
+    dry_expect core-replace 'deploy --replace-instance --step 1 --prepare' 'deploy --replace-instance --step 1 --execute' \
+        'deploy --replace-instance --step 2 --prepare' 'deploy --replace-instance --step 2 --execute' \
+        '[StackName,Status,ExecutionStatus]' 'replace: /srv/data is still unmounted' \
+        'ssm send-command' 'AWS-RunShellScript' 'umount /srv/data' 'ec2 create-snapshot' \
+        'ec2 wait snapshot-completed' '--parameter-overrides AttachInstance=false' 'AttachInstance=true' \
+        'AmiId=check-fixture'
+    dry_refuse core-replace 'a real run stops here: EC2_AMI_ID'
+    for command in current-image new-image; do
+        dry_case "core-$command" /dev/null --env-file "$dry/core.env" "$command" --write
+        dry_expect "core-$command" 'set EC2_AMI_ID in'
+    done
+
     # `deploy` gives the embedding model of the environment file to the template.
     sed 's/^EC2_BEDROCK_EMBED_MODEL=.*$/EC2_BEDROCK_EMBED_MODEL=check.fixture-embed-v9:0/' "$dry/core.env" >"$dry/embed.env"
     dry_case embed-deploy /dev/null --env-file "$dry/embed.env" deploy
@@ -2179,7 +2204,10 @@ EOT
         }
         sed -n "s/^provider_names='\{0,1\}\([A-Z0-9_ ]*\)'\{0,1\}\$/\1/p" "scripts/dns/$provider.sh" |
             tr ' ' '\n' | sed '/^$/d' | LC_ALL=C sort >"$dry/names.file"
-        block_names 'DNS provider' "$provider" | LC_ALL=C sort >"$dry/names.sample"
+        # The host token of the Pangolin edge is in the block of cloudflare: Traefik
+        # reads it, and the `dns` command does not.
+        block_names 'DNS provider' "$provider" | grep -vx EC2_CLOUDFLARE_DNS01_TOKEN |
+            LC_ALL=C sort >"$dry/names.sample"
         cmp -s "$dry/names.file" "$dry/names.sample" ||
             echo "check: the names of scripts/dns/$provider.sh are not the names of the block DNS provider $provider of the sample" >>"$dry/problems"
     done
@@ -2694,7 +2722,8 @@ boot=$work/boot
 # boot_fixture <id> <EC2_OPTIONS> <options with values>: make the fixture of one
 # case in $boot/roots/<id>. It holds the stack values file, as the user data
 # writes it, and the environment file: each line of .env.example, as the host
-# has it. EC2_OPTIONS gets the second argument. An empty name gets a fake value
+# has it. EC2_OPTIONS gets the second argument, and EC2_DNS_PROVIDER gets
+# porkbun when it holds pangolin. An empty name gets a fake value
 # of its own when a host with the options of the third argument needs it, and
 # $boot/fakes lists these values:
 #   - a name of Part 1;
@@ -2732,6 +2761,9 @@ EOT
         value = substr($0, i + 1)
         if (name == "EC2_OPTIONS") {
             value = setting
+        } else if (name == "EC2_DNS_PROVIDER" && index("," setting ",", ",pangolin,") > 0) {
+            # The option pangolin needs a provider of the DNS-01 challenge.
+            value = "porkbun"
         } else if (value ~ /^[ \t]*$/) {
             n++
             if (name == "EC2_DOMAIN") {
@@ -3706,6 +3738,14 @@ else
     run "memory deploy" python3 scripts/test-memory-deploy.py
 fi
 
+if [ ! -f scripts/test-memory-signin.py ]; then
+    result "memory signin" skip "no sign-in helper tests in this copy"
+elif ! command -v python3 >/dev/null 2>&1; then
+    no_tool "memory signin" python3
+else
+    run "memory signin" python3 scripts/test-memory-signin.py
+fi
+
 # --- the shell scripts ------------------------------------------------------
 
 # shell_group <check> <dialect or empty> <file>...
@@ -3876,8 +3916,12 @@ fi
 
 script_selftest "selftest scripts/aws-provisioner.sh" scripts/aws-provisioner.sh \
     sh scripts/aws-provisioner.sh selftest
+script_selftest "selftest scripts/aws-account-baseline.sh" scripts/aws-account-baseline.sh \
+    bash scripts/aws-account-baseline.sh selftest
 script_selftest "selftest scripts/entra-app.sh" scripts/entra-app.sh \
     sh scripts/entra-app.sh selftest
+script_selftest "selftest scripts/entra-memory-app.sh" scripts/entra-memory-app.sh \
+    sh scripts/entra-memory-app.sh selftest
 if [ ! -f scripts/security-review.sh ]; then
     result "selftest scripts/security-review.sh" skip "no file yet"
 elif ! command -v python3 >/dev/null 2>&1; then
@@ -3908,6 +3952,14 @@ if [ -f scripts/test-operations.py ]; then
     run "operations regression" python3 -I scripts/test-operations.py
 else
     result "operations regression" skip "no operations tests in this copy"
+fi
+
+# --- host replace regression checks -----------------------------------------
+
+if [ -f scripts/test-host-replace.py ]; then
+    run "host replace regression" python3 -I scripts/test-host-replace.py
+else
+    result "host replace regression" skip "no host replace tests in this copy"
 fi
 
 # --- storage regression checks ----------------------------------------------

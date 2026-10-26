@@ -69,7 +69,8 @@ An ARN is an Amazon Resource Name, AWS's identifier for one resource or identity
 | S3 bucket, when enabled | `${Project}-memory-${Stage}` | Holds OpenKnowledge-style files under `projects/` and `users/`. |
 | Bucket policy, when enabled | Attached to the stage bucket | Denies requests without TLS and requests from identities outside the approved list. |
 | Permissions boundary | `${Project}-memory-${Stage}-boundary` | Limits the identity policies of every stage user to this memory and bucket. |
-| Active person's IAM user | `${Project}-memory-${Stage}-person-<actorId>` | Carries one inline policy, `agentcore-memory`, and the stage boundary. |
+| Active person's IAM user | `${Project}-memory-${Stage}-person-<actorId>` | Carries one inline policy, `agentcore-memory`, and the stage boundary. Omitted with `iamUser: false`. |
+| Bound person's IAM role | `${Project}-memory-${Stage}-person-<actorId>-role` | Carries the same inline policy, boundary and tags for one Cognito identity. See [Person roles](#person-roles). |
 | Submit user and its managed policy | `${Project}-memory-${Stage}-submit` | Reads and writes global and private actor records, and all project and user files. |
 | Worker user and its managed policy | `${Project}-memory-${Stage}-worker` | Reads global and project shared records, and all project files. |
 | Memory resource policy | Not emitted for Memory | The CloudFormation resource policy type currently supports Runtime and Gateway only. |
@@ -140,6 +141,9 @@ It is a person number, not a password or login factor; AWS authenticates the IAM
 Every member is active.
 Every maintainer and deleter is a member, and every project has at least one maintainer.
 An offboarded person keeps its registry entry but has no rendered IAM user.
+The optional person field `iamUser` defaults to `true`; `iamUser: false` renders no IAM user and so no key.
+With the overlay, the renderer refuses `iamUser: false` for a person with no identity, because that person has no access.
+The tracked render accepts it; there the person has no user and no role.
 Remove that person from project lists before rendering.
 Keys created outside CloudFormation need separate cleanup before CloudFormation can delete the user.
 Changing the YAML alone does not revoke a live key or erase records.
@@ -306,6 +310,145 @@ Each saved key answered `sts get-caller-identity` with its own user.
 Not verified: a direct read of the saved Bitwarden items; the proof is the confirmed write of the sync command.
 Not verified: key rotation or a complete Bitwarden Send hand-over for these stacks.
 
+The owner decision for the keys of the dev stage:
+The four example people keep their keys until a role-based test exists; then their keys go.
+The submit and worker users keep their keys.
+Their rotation date is 2027-01-18, 90 days after the keys were issued.
+The rotation itself needs its own owner approval.
+The real person moves from the key to the person role in a separate change.
+
+## Person roles
+
+A person role gives a person short AWS sessions with no long-term key.
+The person signs in at Entra ID through the Cognito user pool of the identity stack `bootstrap-${Project}-memory-identity-${Stage}`.
+The sign-in gives a Cognito identity ID; the role trusts exactly that identity.
+
+### The identity overlay
+
+The Cognito identity IDs of real people never enter a tracked file.
+They live in the ignored overlay file `.local/memory/<stage>.identities.yaml` of the checkout that renders and deploys:
+
+```yaml
+schemaVersion: 1              # The supported overlay format.
+stage: dev                    # Must match the selected stage.
+identities:                   # One identity ID per bound person.
+  alice: us-east-1:00000000-0000-4000-8000-000000000001  # <region>:<uuid>
+```
+
+The renderer merges the overlay into the stage file and refuses:
+
+- an identity that is not `<region>:<uuid>`, or not in the region of the stage;
+- one identity on two people;
+- an entry for a person who is not in the stage file, or who is offboarded;
+- `iamUser: false` for a person with no identity;
+- an empty overlay file.
+
+A refusal names the people, never the identity ID.
+A person with no identity gets no role.
+A worktree has its own `.local/`; copy the overlay there before a render in a worktree.
+
+The overlay has a second copy in credential sync, under one name for each stage: `TENANT_EC2_MEMORY_<STAGE>_IDENTITIES`.
+After each change of the overlay, give the file to `bw-session-update.sh` on standard input:
+
+```sh
+bw-session-update.sh TENANT_EC2_MEMORY_DEV_IDENTITIES < .local/memory/dev.identities.yaml
+```
+
+Then load the shell rc file again, as the helper says. The credential sync block exports the copy.
+The read-only `overlay` command compares the overlay of the checkout with the saved copy, with no AWS call:
+
+```sh
+scripts/aws-memory.sh overlay --stage dev --compare
+```
+
+It prints `overlay dev: equal`, `overlay dev: differs` or `overlay dev: no saved copy`, and never an identity ID.
+It exits 0 only for `equal`.
+It compares the YAML content: a comment or the last newline makes no difference.
+A checkout with no overlay gives `differs` when a saved copy exists.
+Run it before each deploy step.
+To restore the overlay of a checkout from the saved copy:
+
+```sh
+mkdir -p -m 700 .local/memory
+(umask 077; printf '%s\n' "$TENANT_EC2_MEMORY_DEV_IDENTITIES" > .local/memory/dev.identities.yaml)
+```
+
+An offline run with an export line in the form of the credential sync block, and the restore above, gave `equal`.
+Not verified: a save with `bw-session-update.sh`, and a Bitwarden field with several lines. No save ran for this change.
+
+### What the renderer makes
+
+`render` always writes the tracked template `scripts/aws-memory-<stage>.cfn.yaml` from the stage file alone.
+With no overlay, this template is the only output and has no role.
+With an overlay, `render` also writes the bound template `.local/memory/aws-memory-<stage>.cfn.yaml` with mode 0600.
+`check` compares both templates; a stale bound template gives FAIL.
+`deploy` uses the bound template when the overlay exists, and prints the template path first.
+With no overlay, `deploy` refuses a stage file with an active person with `iamUser: false`, because that person has no access.
+
+Each bound person gets one `AWS::IAM::Role`:
+
+- the name `${Project}-memory-${Stage}-person-<actorId>-role`, so a user and a role can live side by side;
+- one trust statement: `sts:AssumeRoleWithWebIdentity` from `cognito-identity.amazonaws.com`, exact `aud`, exact `sub` and `amr` with `authenticated`;
+- the `aud` value from `Fn::ImportValue` of the export `${Project}-memory-identity-${Stage}:IdentityPoolId`;
+- the same inline policy `agentcore-memory` as the person user, the stage boundary and the person tags;
+- `MaxSessionDuration` 3600.
+
+The trust has exactly one action and no `sts:TagSession`, because a session tag `actorId` would replace the `actorId` tag of the role.
+The bucket policy lists the role ARN as it lists a person user.
+The output `PersonRoles` names the roles; a template with no role has no such output and no import.
+The template fit check counts users and roles; a role adds about the size of a user.
+The `-role` suffix lowers the `Project` length limit by five characters when a person is bound.
+CloudFormation refuses the deletion of the identity stack while a role imports its export.
+
+`check --stage <s>` prints one line for each role with `keys=none` and its boundary and policy state.
+`keys` and `rotate` ignore roles: a role has no access key.
+
+### The role guard
+
+A deploy from a checkout with no overlay, or with an incomplete overlay, removes the role of each person with no identity.
+Both deploy steps read the change set before they continue.
+When the change set removes an `AWS::IAM::Role`, the step prints the logical ID and the name of each such role.
+It also prints the `delete-change-set` command of the change set, and exits 1. Nothing executes.
+The option `--allow-role-removal` permits the removal. Give it on both steps, and only for an intended removal.
+With the option, the prepare step prints the execute command with the option.
+Not verified: the guard against a live change set; the tests use stub change sets.
+Limit: the guard reads `Remove` changes only. A change that rewrites the trust of a role in place, for example a wrong identity ID in the overlay, passes the guard; the printed change list shows it.
+
+### Bind a person
+
+1. The person signs in once with the helper `login`. The helper prints two labeled lines: the identity ID and the user pool `sub`.
+2. The person sends the two lines over a channel that identifies the sender. The `sub` grants nothing by itself.
+3. The operator reads the object ID of the person in the Entra admin center. No repository file keeps it.
+4. Ask the person to sign in again right before the check. Cognito rewrites the mapped value `custom:entra_oid` at each sign-in.
+5. Run the read-only check:
+
+   ```sh
+   scripts/aws-memory.sh bind-check --stage <s> --oid <entra-object-id> --sub <reported-sub>
+   ```
+
+   It reads the output `UserPoolId` of the identity stack and lists the pool users.
+   It prints `match` only when exactly one record holds the Entra user ID and its `sub` equals the reported `sub`.
+   It refuses when more than one record holds that Entra user ID, and it prints the count only.
+   It changes nothing and prints no value of another record.
+6. After a match, add the identity ID to the overlay by hand. Save the [second copy](#the-identity-overlay) of the overlay.
+7. Render, check and deploy with the two deploy steps. The identity stack must exist first.
+
+A changed Entra account gives a new `sub` and a new identity ID: run the steps again and replace the identity, never add a second one.
+Offboarding order: remove the Entra assignment, then set `status: offboarded`, remove the overlay entry and save the second copy.
+Then render and deploy with `--allow-role-removal` on both deploy steps, then delete the Cognito user and the identity.
+
+### Roll back to the IAM user
+
+A person keeps `iamUser: true` until the role passes the live tests.
+To roll back: set `iamUser: true`, render, deploy, and issue a key with `keys --apply`.
+To remove only the role, remove the overlay entry and save the second copy.
+Then render and deploy with `--allow-role-removal` on both deploy steps; the [role guard](#the-role-guard) refuses the removal without it.
+The identity stack can go only after no role imports its export.
+
+Not verified: a deploy of a bound template; no AWS call ran for this section.
+Not verified: `aws:PrincipalArn` of a basic-flow role session matches the role ARN in `DenyOutsiders`.
+Not verified: the trust refuses a second Entra identity; no second Entra test account is known.
+
 ## Delete
 
 By default, only the administrator deletes memory records and project files.
@@ -362,13 +505,15 @@ The command interface is the design contract; the template reference describes t
 
    The step creates the change set, waits for it and prints its name, its status and its resource changes. Then it stops. Nothing executes, and no stack resource changes.
 
+   A change set that removes an IAM role stops the step with exit 1; see [The role guard](#the-role-guard).
+
 6. Execute the reviewed change set by its name. Owner word for this step: the owner reads the printed resource changes and approves the execution of that change set.
 
    ```sh
    scripts/aws-memory.sh deploy --stage dev --execute <change-set-name> --profile tenant-ec2-admin
    ```
 
-   The step checks that the change set belongs to the stack of this stage, is ready and carries the same administrator settings. Then it executes that change set and prints a read-only status command. Keep the shell settings of step 5. `deploy --apply` refuses and names the two steps.
+   The step checks that the change set belongs to the stack of this stage, is ready and carries the same administrator settings. It refuses a change set that removes an IAM role, unless `--allow-role-removal` is given. Then it executes that change set and prints a read-only status command. Keep the shell settings of step 5. `deploy --apply` refuses and names the two steps.
 
    The step returns when the execution starts. Its exit code 0 does not prove a complete stack. Run the status command until the stack reaches `CREATE_COMPLETE` or `UPDATE_COMPLETE`. A failed create rolls back; the [template reference](reference/memory-template.md#commands) gives the clean-up before a new prepare step.
 
@@ -411,6 +556,119 @@ Local output files live under `.local/memory/`, which Git ignores.
 Do not paste private outputs or client configuration into a ticket or commit.
 
 Warning: deployment creates billed resources and IAM identities. These examples do not authorize a deployment or key creation.
+
+## The identity stack
+
+A person signs in at Entra ID through Cognito, with no access key.
+The identity stack `bootstrap-${Project}-memory-identity-${Stage}` holds this sign-in for one stage, beside the memory stack.
+Its template is `scripts/aws-memory-identity.cfn.yaml`, with the parameters `Project` and `Stage`.
+
+| Resource | Name or setting |
+| --- | --- |
+| User pool | `${Project}-memory-${Stage}`, tier `LITE`, `AllowAdminCreateUserOnly`, the mutable custom attribute `entra_oid` |
+| Domain | the prefix `${Project}-memory-${Stage}`, the classic hosted page |
+| Entra OIDC provider | `Entra`: the tenant v2.0 issuer, the scopes `openid profile`, `oid` to `custom:entra_oid` |
+| Public client | `${Project}-memory-${Stage}-terminal`: the code flow with PKCE, no client secret, the callback `http://localhost:8400/callback`, a 30-day refresh token, token revocation on |
+| Identity pool | the classic (basic) flow, no unauthenticated identities, `ServerSideTokenCheck` on, no role attachment |
+
+A role attachment would make `GetOpenIdToken` refuse the basic flow, so the template has none.
+The person roles import the identity pool ID from the export `${Project}-memory-identity-${Stage}:IdentityPoolId`.
+The identity stack can go only after no role imports this export.
+The stack outputs are `UserPoolId`, `ClientId`, `Domain`, `IdentityPoolId` and `ProviderName`.
+`Domain` is the host of the hosted page. `ProviderName` is the `Logins` key for `GetId` and `GetOpenIdToken`.
+
+The Entra tenant ID, client ID and client secret are `NoEcho` parameters.
+The `identity` command reads them from three credsync names of the stage:
+
+- `TENANT_EC2_MEMORY_<STAGE>_ENTRA_TENANT_ID`
+- `TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_ID`
+- `TENANT_EC2_MEMORY_<STAGE>_ENTRA_CLIENT_SECRET`
+
+For dev, the names start with `TENANT_EC2_MEMORY_DEV_ENTRA_`. Load the credsync block into the shell first. The command prints each name with `set` or `missing`, never a value.
+
+The `identity` command has the two steps of `deploy`. Each step needs its own owner word and an explicit `--profile`.
+
+1. Preview the change set command. This step calls no AWS API.
+
+   ```sh
+   scripts/aws-memory.sh identity --stage dev
+   ```
+
+2. Prepare the change set. Owner word for this step: the owner approves the creation of a change set for the identity stack of this stage.
+
+   ```sh
+   scripts/aws-memory.sh identity --stage dev --prepare --profile tenant-ec2-admin
+   ```
+
+   The step writes the three values to a mode 0600 file in `/dev/shm` (RAM) and gives CloudFormation only the file path. A value is never a command argument. The step removes the file after the change set request, and on every exit path: an error and a signal too. Then it shows the change set and stops.
+
+   A stack in a failed first-create state (`CREATE_FAILED` or `ROLLBACK_*`) takes no change set. The step stops and prints the `delete-stack` command of the stack. Delete the stack with an owner word, then prepare again.
+
+3. Execute the reviewed change set by its name. Owner word for this step: the owner reads the printed resource changes and approves the execution of that change set.
+
+   ```sh
+   scripts/aws-memory.sh identity --stage dev --execute <change-set-name> --profile tenant-ec2-admin
+   ```
+
+   The step checks that the change set belongs to the identity stack of this stage, is ready, and has the same `Project` and `Stage` and the three Entra parameters. It executes only that change set. It needs no credsync value.
+
+Cognito refuses a domain prefix that is in use. Before the first dev deploy, delete any other stack that holds the prefix `${Project}-memory-dev`.
+
+## Sign in with your person role
+
+A person signs in once at Entra ID and then uses a normal AWS profile with no access key.
+The helper `scripts/memory-signin.py` (Python, standard library only) turns the sign-in into one-hour sessions of the person role `${Project}-memory-${Stage}-person-<actorId>-role`.
+The AWS CLI, the SDKs and Pi read the profile through the AWS `credential_process` contract. Pi needs no change.
+
+The administrator makes the two files of a person. Both come from saved outputs, with no AWS call in the last step:
+
+```sh
+scripts/aws-memory.sh outputs --stage dev --write --profile tenant-ec2-admin
+scripts/aws-memory.sh outputs --stage dev --identity --write --profile tenant-ec2-admin
+scripts/aws-memory.sh client-config --stage dev --actor alice --out <directory>/config.json
+```
+
+`outputs --identity --write` saves the identity stack outputs in `.local/memory/<stage>-identity.json`.
+`client-config --out FILE` writes the client config to `FILE` and the sign-in file `<profile>.signin.json` beside it.
+The sign-in file holds the region, the domain, the client ID, the identity pool ID, the provider name, the role ARN, the `actorId` and the profile name. It holds no secret. The profile name stays `tenant-ec2-memory-<stage>-person-<actorId>`.
+With no saved identity outputs, `client-config --out` writes the client config only and says so.
+
+The person does these steps one time on each host:
+
+1. Save the client config and the sign-in file in one private directory. Keep both files mode `0600`.
+2. Write the profile block into `~/.aws/config`. The command refuses to overwrite a different block of the same profile.
+
+   ```sh
+   python3 scripts/memory-signin.py setup --signin <directory>/tenant-ec2-memory-dev-person-alice.signin.json
+   ```
+
+3. Sign in. On a host with a browser, the command opens the hosted page and a listener on `http://localhost:8400/callback` catches the redirect.
+
+   ```sh
+   python3 scripts/memory-signin.py login --signin <directory>/tenant-ec2-memory-dev-person-alice.signin.json
+   ```
+
+   On a host with no browser (an SSH shell, the dev host), add `--no-browser`. The command prints the sign-in URL. Open it in a browser on any machine and sign in at Entra. The browser then shows an error page at `localhost:8400`; that is expected. Copy the full address of that page and paste it into the terminal. The command checks the state of the address before it exchanges the code.
+
+4. Give the two printed lines `identity-id:` and `user-pool-sub:` to the administrator. The administrator binds the identity to your role and deploys it. Until then, the profile gets no session.
+
+After that, use the profile as usual, for example `aws sts get-caller-identity --profile tenant-ec2-memory-dev-person-alice`.
+The session lasts one hour, and the helper gets a new one with the cached refresh token, with no browser. The refresh token lasts 30 days. Then run `login` again.
+The `credential-process` command never asks for input. With no valid sign-in, it exits 1 and prints one line that names the `login` command.
+
+The cache is `~/.cache/tenant-ec2-memory-signin/<profile>/`: a `0700` directory with the `0600` files `token.json` (the refresh token and the identity ID) and `session.json` (the STS session). The helper checks the owner, the mode and the link count before each read and refuses a difference. A file that a parallel call replaced during the read has no link and is accepted; a file with two links is refused.
+
+To end the sign-in on a host, run `logout`. It revokes the refresh token at Cognito and deletes the cache of the profile. If Cognito does not confirm the revoke, the token stays in the cache and `logout` exits 1: run `logout` again. Only a revoke, or an answer that the token is not valid, deletes the token.
+
+```sh
+python3 scripts/memory-signin.py logout --signin <directory>/tenant-ec2-memory-dev-person-alice.signin.json
+```
+
+The container of the development-only memory explorer uses the same helper. Its image has the Alpine `python3` package. The helper, the sign-in file and the AWS `config` are mounted read-only, and the cache directory of the container is a `0700` directory of uid 1000.
+The person runs `login --no-browser` one time inside the container, and `logout` there at the end. The deploy README of the explorer gives the steps in "Start in live mode".
+
+The tests in `scripts/test-memory-signin.py` run the helper against a stub token endpoint, a stub Cognito and a stub STS, and run the Python SDK process provider against it.
+Not verified: the helper against the live dev identity stack, the browser listener, and a revoke at Cognito.
 
 ## What the dev stage proved
 

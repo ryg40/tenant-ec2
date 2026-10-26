@@ -2,6 +2,8 @@
 
 [DNS records](../options/dns.md) | [Pangolin edge](../options/pangolin.md) | [Host boot](host-boot.md) | [Deploy script](deploy-script.md)
 
+Note: this move is one path for the option `pangolin` when the zone is at Cloudflare. The other path keeps the zone at Cloudflare: set `EC2_DNS_PROVIDER=cloudflare` and the host token `EC2_CLOUDFLARE_DNS01_TOKEN`, and Traefik gets the certificate through Cloudflare ([DNS providers](../options/dns.md#the-option-pangolin)). That path moves no name server.
+
 Use this page for a first deploy with the option `pangolin` when another provider answers for the domain.
 The example of this page is a zone at Cloudflare.
 The authoritative DNS of the domain moves to Porkbun, with each record of the zone.

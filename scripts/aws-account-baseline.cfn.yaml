@@ -1,0 +1,19 @@
+# The account baseline of one region. See docs/install.md#the-account-baseline.
+# Stack: bootstrap-tenant-ec2-baseline-<region>, one stack in each region in use.
+# Deploy: scripts/aws-account-baseline.sh deploy or import, with the administrator profile.
+# The resource type has no tags. The stack tag Project=tenant-ec2 marks the stack.
+# The S3 account public access block has no resource type. docs/install.md gives its API call.
+# No region and no identifier is in this file.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: The account baseline of one region (the block of public EBS snapshot sharing).
+
+Resources:
+  # One setting for each region and account. A delete of the stack keeps the setting:
+  # the delete handler of the type disables the block, and Retain stops that call.
+  # An import needs a deletion policy on each imported resource.
+  SnapshotBlockPublicAccess:
+    Type: AWS::EC2::SnapshotBlockPublicAccess
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      State: block-all-sharing

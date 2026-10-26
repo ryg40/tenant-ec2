@@ -4,7 +4,7 @@
 
 `scripts/check.sh` runs source checks, local container checks and offline regression tests over its own tree.
 An absent file kind gives a skip line.
-Each memory, operations, storage, verifier and publish regression line reports a skip when its test file is absent.
+Each memory, operations, host replace, storage, verifier and publish regression line reports a skip when its test file is absent.
 The number of result lines depends on the templates and stage files in the tree.
 The pre-commit hook runs the check script on the exact staged copy, before the scan.
 
@@ -71,6 +71,7 @@ A source check never qualifies the dormant agent or bypasses its upstream releas
 | `aws look docs/aws-*.html` | Each archify view of `docs/` holds the current AWS look. | Python 3 and `--check`; no network call, also with `CHECK_OFFLINE=1`. It does not run archify. |
 | `local run` | The real gate image with a stub identity provider and upstream. | Docker, Python 3 and `ok-auth/local-run.sh --upstream stub`. |
 | `operations regression` | The templates, the IAM limits, the journal routing, the cursor, the rotation, the agent files and the bootstrap switch. | `python3 -I scripts/test-operations.py`; needs PyYAML. No network call. |
+| `host replace regression` | The pinned image `AmiId`, the refusal of an empty `EC2_AMI_ID`, `current-image` and `new-image`, and the two steps of `deploy --replace-instance`, each with `--prepare` and `--execute <name>`: the refusal of a step with no word, the order of the parts, the stop after the change set of a prepare, the refusal without the unmount proof, the snapshot wait and its reuse, the strict change set of step 1, the execute checks (the stack, the status, the changes, the mount read again), the proofs of step 2 and the dry runs. | `python3 -I scripts/test-host-replace.py`; needs PyYAML. A stub of the AWS CLI answers each call. No network call. |
 | `storage regression` | The order of the first boot, a missing or late mount, the checks at a restart, the fstab paths, the unit syntax and the Git ownership. It runs the Compose command of the bootstrap for each of the four file sets. | `python3 -I scripts/test-storage.py`; needs PyYAML and the systemd analysis tools. The fixture with numeric ids needs root. No service and no mount runs. |
 | `verifier regression` | The state of a deployed container, the internal HTTP status and authentication, redirects, deadlines, safe errors and the SSM commands. One test for each value of `EC2_OPTIONS`: the verifier checks the services of that file set only. | `python3 -I scripts/test-verify-deployed.py`; needs PyYAML, and `curl` and Node for the complete probe fixtures. No live service and no AWS call. |
 | `publish regression` | The private exclusions, the export of the publish set and the reader rules, when the development tests exist. | Python's unittest runner. It also runs on the staged copy with no Git metadata. A snapshot has no development tests and reports a skip. |

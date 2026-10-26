@@ -23,7 +23,7 @@
 # The script makes each of them. No container mounts <out> itself, so no
 # container reads blueprint.yaml: the bootstrap applies it.
 #
-# The script reads six names from the environment file and no name from the
+# The script reads seven names from the environment file and no name from the
 # environment of the shell:
 #   EC2_DOMAIN                the domain subtree; necessary
 #   EC2_EDGE_NAMES            the public names: a list with commas and no blank.
@@ -38,8 +38,14 @@
 #                             the script uses pangolin.<EC2_DOMAIN>
 #   EC2_PANGOLIN_SITE         the identifier of the local site of the host;
 #                             necessary
-# It reads no secret. The server secret and the two Porkbun values go to the
-# containers through compose.pangolin.yaml, not through a file.
+#   EC2_DNS_PROVIDER          the DNS provider of the DNS-01 challenge of the
+#                             certificate: porkbun or cloudflare. It is the
+#                             `provider` of the resolver in the Traefik file. With
+#                             no value the script uses porkbun. Step 2 of the
+#                             bootstrap and the `secret` command refuse an empty
+#                             value with the option pangolin.
+# It reads no secret. The server secret and the credential of the DNS provider go
+# to the containers through compose.pangolin.yaml, not through a file.
 #
 # The resources. The blueprint has one resource for each known public name. The
 # script makes four values from EC2_EDGE_NAMES, one for each resource: `true`
@@ -63,7 +69,7 @@ set -eu
 # The names that a file of pangolin/ can use. envsubst replaces only these. The
 # last four are the values that this script makes from EC2_EDGE_NAMES.
 # shellcheck disable=SC2016 # envsubst reads the names as text
-NAMES='${EC2_DOMAIN} ${EC2_ACME_EMAIL} ${EC2_ADMIN_CIDR} ${EC2_GERBIL_BASE_ENDPOINT} ${EC2_PANGOLIN_SITE} ${EDGE_OK} ${EDGE_AGENT} ${EDGE_LLM} ${EDGE_OV}'
+NAMES='${EC2_DOMAIN} ${EC2_ACME_EMAIL} ${EC2_ADMIN_CIDR} ${EC2_GERBIL_BASE_ENDPOINT} ${EC2_PANGOLIN_SITE} ${EC2_DNS_PROVIDER} ${EDGE_OK} ${EDGE_AGENT} ${EDGE_LLM} ${EDGE_OV}'
 # The public names that EC2_EDGE_NAMES can hold: one resource of the blueprint each.
 KNOWN="ok agent llm ov"
 
@@ -81,7 +87,7 @@ Make the directory of each edge service there: config, gerbil and traefik.
   --dry-run           name each file; write nothing
 
 Names: EC2_DOMAIN, EC2_EDGE_NAMES, EC2_ACME_EMAIL, EC2_ADMIN_CIDR,
-EC2_GERBIL_BASE_ENDPOINT, EC2_PANGOLIN_SITE.
+EC2_GERBIL_BASE_ENDPOINT, EC2_PANGOLIN_SITE, EC2_DNS_PROVIDER.
 Exit: 0 pass, 1 a value is missing or not valid, 2 usage or tool error.
 EOT
 }
@@ -134,6 +140,7 @@ EC2_ACME_EMAIL=$(env_value EC2_ACME_EMAIL)
 EC2_ADMIN_CIDR=$(env_value EC2_ADMIN_CIDR)
 EC2_GERBIL_BASE_ENDPOINT=$(env_value EC2_GERBIL_BASE_ENDPOINT)
 EC2_PANGOLIN_SITE=$(env_value EC2_PANGOLIN_SITE)
+EC2_DNS_PROVIDER=$(env_value EC2_DNS_PROVIDER)
 edge_names=$(env_value EC2_EDGE_NAMES)
 
 valid EC2_DOMAIN "$EC2_DOMAIN" '[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?'
@@ -148,6 +155,10 @@ valid EC2_ADMIN_CIDR "$EC2_ADMIN_CIDR" "$octet\\.$octet\\.$octet\\.$octet/(1[6-9
 valid EC2_GERBIL_BASE_ENDPOINT "$EC2_GERBIL_BASE_ENDPOINT" '[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?'
 valid EC2_PANGOLIN_SITE "$EC2_PANGOLIN_SITE" '[A-Za-z0-9]([A-Za-z0-9_-]*[A-Za-z0-9])?'
 valid EC2_EDGE_NAMES "$edge_names" '[a-z0-9]+(,[a-z0-9]+)*'
+# The two DNS providers of the edge. Traefik reads the credential of the provider
+# from its environment (compose.pangolin.yaml).
+[ -n "$EC2_DNS_PROVIDER" ] || EC2_DNS_PROVIDER=porkbun
+valid EC2_DNS_PROVIDER "$EC2_DNS_PROVIDER" 'porkbun|cloudflare'
 # One value for each resource of the blueprint: `true` for a name of the list.
 EDGE_OK=false
 EDGE_AGENT=false
@@ -173,7 +184,7 @@ for name in $edge_names; do
     esac
 done
 IFS=$old_ifs
-export EC2_DOMAIN EC2_ACME_EMAIL EC2_ADMIN_CIDR EC2_GERBIL_BASE_ENDPOINT EC2_PANGOLIN_SITE
+export EC2_DOMAIN EC2_ACME_EMAIL EC2_ADMIN_CIDR EC2_GERBIL_BASE_ENDPOINT EC2_PANGOLIN_SITE EC2_DNS_PROVIDER
 export EDGE_OK EDGE_AGENT EDGE_LLM EDGE_OV
 
 # render <source below pangolin/> <target below the output directory> <mode>

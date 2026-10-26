@@ -6,17 +6,54 @@
 # See docs/reference/deploy-script.md.
 #
 # Usage: scripts/aws-host.sh [--dry-run] [--env-file <path>] <command> [<option>]
-#   deploy [--replace-instance] [--allow-remove]
+#   deploy [--replace-instance --step 1|2 --prepare|--execute <name>] [--allow-remove]
 #       Create or update the stack with `aws cloudformation deploy`. Each parameter of the
 #       template comes from the environment file. EC2_OPTIONS sets the parameter
-#       EnablePangolin: true with the option pangolin, false without it. Before an update,
-#       the script makes a change set and shows it. It stops and deletes the change set in
-#       two cases. A replacement is the value True or Conditional.
-#       - The change set replaces the template resource Instance. --replace-instance
-#         accepts this.
+#       EnablePangolin: true with the option pangolin, false without it. EC2_AMI_ID sets
+#       the pinned image AmiId; an empty EC2_AMI_ID stops the command (see current-image
+#       and new-image). Before an update, the script makes a change set and shows it. It
+#       stops and deletes the change set in two cases. A replacement is the value True or
+#       Conditional.
+#       - The change set replaces the template resource Instance. Only the two steps of
+#         --replace-instance accept this.
 #       - The change set removes Instance, DataVolume, FileSystem or ElasticIp, or it
 #         replaces DataVolume or FileSystem. --allow-remove accepts this. Each option
 #         accepts its own case only.
+#       The plain deploy is one run: it makes, shows, checks and runs its change set.
+#       --replace-instance replaces the instance in two steps. Each step has two runs, each
+#       with its own owner word: --prepare makes the change set, shows it and stops with its
+#       name; --execute <name> checks that change set again and runs it. A step with no
+#       --prepare or --execute stops and names the forms, before any AWS call.
+#       --step 1 --prepare: make the change set of step 2, show it and delete it; it must
+#         replace Instance (True). Then, through one AWS-RunShellScript command on the old
+#         instance: export the host journal to /srv/data/journal-before-replace/<time>,
+#         stop Docker and unmount /srv/data. The output must prove the unmount. Then one
+#         snapshot of the data volume (tags Project, Backup, Name=<project>-data-before-
+#         replace) and a wait for completed. A repeated prepare that finds /srv/data
+#         unmounted at the start uses a completed snapshot of that tag younger than one
+#         hour again. Then a change set from the template of the stack with
+#         AttachInstance=false. It must remove DataVolumeAttachment and
+#         ElasticIpAssociation and change nothing else. It waits. The site is down from
+#         this run.
+#       --step 1 --execute <name>: the change set must belong to the stack, have the status
+#         CREATE_COMPLETE, the execution status AVAILABLE and AttachInstance=false, and
+#         still remove exactly the two attachments. One AWS-RunShellScript command must
+#         prove that /srv/data is still unmounted. Then the change set runs, and the data
+#         volume must have no attachment.
+#       --step 2 --prepare: the stack must have AttachInstance=false. The change set of the
+#         template of this checkout must replace Instance (True). It waits.
+#       --step 2 --execute <name>: the same checks of the change set (AttachInstance=true,
+#         the replacement of Instance, no removal of DataVolume, FileSystem or ElasticIp),
+#         then it runs. After the update: the data volume and the Elastic IP must be on the
+#         new instance.
+#   current-image [--write]
+#       Read the image id of the running instance of the stack (ec2 describe-instances)
+#       and print it as EC2_AMI_ID=<id>. With --write, set it in the environment file.
+#       With this value, a deploy replaces nothing for the image.
+#   new-image [--write]
+#       Read the image id of the SSM parameter EC2_AMI_SSM_PARAMETER (ssm get-parameter)
+#       and print it as EC2_AMI_ID=<id>. With --write, set it in the environment file. A
+#       new value replaces the instance at the next deploy: use --replace-instance.
 #   outputs [--write]
 #       Print each output of the stack as a NAME=value line. An output is not a secret.
 #       With --write, set these names in the environment file: EC2_GERBIL_BASE_ENDPOINT
@@ -31,7 +68,9 @@
 #       - each name of Part 1 of .env.example;
 #       - each name with an empty value in the block `Option <name>` of .env.example, when
 #         EC2_OPTIONS of the input holds <name>;
-#       - the Porkbun pair, when EC2_OPTIONS holds pangolin.
+#       - the host names of the DNS provider, when EC2_OPTIONS holds pangolin: the
+#         Porkbun pair with EC2_DNS_PROVIDER=porkbun, EC2_CLOUDFLARE_DNS01_TOKEN with
+#         EC2_DNS_PROVIDER=cloudflare.
 #       These names need a value too. The value of .env.example is a correct value:
 #       - each name that a Compose file of the file set reads in the form ${NAME:?...};
 #       - with the option pangolin, each setting that scripts/render-pangolin.sh needs;
@@ -41,12 +80,13 @@
 #       its JSON file. Both commands use the same form tests, without a network call.
 #       A wrong nonempty form stops even --dry-run. A message names the setting and rule.
 #       A name of an option that is off needs no value. --allow-empty accepts one named
-#       empty value of Part 1, of an option block or of the Porkbun pair. The command
+#       empty value of Part 1, of an option block or of these host names. The command
 #       stops also when a value holds a single quote or ends with a backslash.
 #       A name of a block `DNS provider <name>` of .env.example does not go into the
 #       secret: a DNS credential stays on the development machine. The one exception is
-#       the Porkbun pair with the option pangolin: the Pangolin edge needs it on the host
-#       for its certificate. The command prints each name that it leaves out.
+#       the host names of the DNS provider with the option pangolin: the Pangolin edge
+#       needs them on the host for its certificate. The command prints each name that it
+#       leaves out.
 #   generated-status
 #       Read <project>/generated and print the three names with present or absent.
 #       Print no value. An unavailable secret read fails with a name-only warning.
@@ -107,7 +147,9 @@
 #   EC2_STACK_NAME=$EC2_PROJECT-host
 #   EC2_DOMAIN                     the domain of the host: each public name is one label
 #                                  below it
-#   The parameters of the template: EC2_INSTANCE_TYPE, EC2_AMI_SSM_PARAMETER, EC2_VPC_CIDR,
+#   EC2_AMI_SSM_PARAMETER          the public parameter of the newest image; only new-image
+#                                  reads it
+#   The parameters of the template: EC2_INSTANCE_TYPE, EC2_AMI_ID, EC2_VPC_CIDR,
 #   EC2_ADMIN_CIDR, EC2_SSH_PUBLIC_KEY_FILE (a path; the script reads the public key from
 #   the file), EC2_DATA_VOLUME_SIZE, EC2_SNAPSHOT_REPOSITORY, EC2_SNAPSHOT_TAG,
 #   EC2_SNAPSHOT_COMMIT, EC2_ENABLE_BUCKET, EC2_ENABLE_OPERATIONS, EC2_ALARM_EMAIL,
@@ -125,8 +167,8 @@
 #   EC2_EDGE_NAMES     a list of public names with commas and no blank; the known names are
 #                      ok, llm, ov and agent; the default is ok
 #   EC2_DNS_PROVIDER   manual (the default), porkbun, route53 or cloudflare. The option
-#                      pangolin needs porkbun: its certificate uses the DNS-01 challenge
-#                      through Porkbun.
+#                      pangolin needs porkbun or cloudflare: its certificate uses the
+#                      DNS-01 challenge through that provider.
 #   This script reads no credential of a DNS provider. scripts/dns-records.sh reads it
 #   from the environment file.
 #
@@ -166,12 +208,16 @@
 # Not verified: no stack exists, so no run proved these facts. The tests of this script
 # used a stub of the AWS CLI.
 #   - Not verified: a real deploy, a real secret write and a real SSM command.
+#   - Not verified: the two steps of --replace-instance on a live stack, and that
+#     `aws cloudformation deploy` keeps each parameter that step 1 does not override.
+#     scripts/test-host-replace.py runs them with a stub of the AWS CLI.
 #   - Not verified: the provisioner policy allows each change set call of an update
 #     (list-change-sets, describe-change-set, execute-change-set, delete-change-set).
 #   - Not verified: after `aws cloudformation deploy --no-execute-changeset`, the list of
-#     the change sets holds one new id. The script finds the change set by this rule.
-#   - Not verified: describe-change-set, delete-change-set and execute-change-set accept
-#     --stack-name together with the id of the change set. The script sends the two.
+#     the change sets holds one new name. The script finds the change set by this rule.
+#   - Not verified: the text output of list-change-sets with the query
+#     Summaries[].ChangeSetName gives the names separated by tabs. The script finds the new
+#     change set by its name.
 #   - Not verified: a run on a host. `verify` expects the snapshot at /opt/<project> on
 #     the host (the user data), with the link .env to the environment file. It reads no
 #     kit clone and no kit-local .env.
@@ -194,14 +240,14 @@ template=$here/aws-host.cfn.yaml
 sample=$top/.env.example
 dns_records=$here/dns-records.sh
 # The parameters of the template that `deploy` sets.
-parameters='Project InstanceType AmiParameter VpcCidr AdminCidr SshPublicKey DataVolumeSize
+parameters='Project InstanceType AmiId VpcCidr AdminCidr SshPublicKey DataVolumeSize
 SnapshotRepository SnapshotTag SnapshotCommit Domain EnablePangolin BedrockEmbedModel
-EnableBucket EnableOperations AlarmEmail AlarmThreshold'
+EnableBucket EnableOperations AlarmEmail AlarmThreshold AttachInstance'
 # The names that the script reads from the environment file. Each other name stays in the
 # file. The helper reads the three option settings with each of them (the function
 # `options` of the helper).
 setting_names='EC2_PROJECT EC2_AWS_PROFILE EC2_AWS_REGION EC2_STACK_NAME EC2_DOMAIN
-EC2_INSTANCE_TYPE EC2_AMI_SSM_PARAMETER EC2_VPC_CIDR EC2_ADMIN_CIDR EC2_SSH_PUBLIC_KEY_FILE
+EC2_INSTANCE_TYPE EC2_AMI_ID EC2_AMI_SSM_PARAMETER EC2_VPC_CIDR EC2_ADMIN_CIDR EC2_SSH_PUBLIC_KEY_FILE
 EC2_DATA_VOLUME_SIZE EC2_SNAPSHOT_REPOSITORY EC2_SNAPSHOT_TAG EC2_SNAPSHOT_COMMIT
 EC2_ENABLE_BUCKET EC2_ENABLE_OPERATIONS EC2_ALARM_EMAIL EC2_ALARM_THRESHOLD
 EC2_BEDROCK_EMBED_MODEL'
@@ -215,6 +261,24 @@ services_copilot='copilot'
 guarded='Instance DataVolume FileSystem ElasticIp'
 # The seconds that `verify` gives the command on the host.
 verify_timeout=900
+# The seconds that step 1 of --replace-instance gives the command on the old host.
+replace_timeout=600
+# The number of runs of `ec2 wait snapshot-completed` in step 1. One run waits at most
+# 40 x 15 s = 10 min, so the limit is about 80 min.
+snapshot_waits=8
+# The mount point of the data volume on the host (scripts/host-userdata.sh).
+data_dir=/srv/data
+# The line of the output of part a of step 1 that proves the unmount.
+unmount_proof="replace: $data_dir is unmounted"
+# The line of part a of step 1 when an earlier run unmounted the volume.
+not_mounted_line="replace: $data_dir is not mounted at the start: an earlier run of step 1 unmounted it; no journal export"
+# The line of the check of step 1 --execute that proves the volume is still unmounted.
+still_unmounted="replace: $data_dir is still unmounted"
+# The seconds that step 1 --execute gives its check on the old host.
+check_timeout=120
+# The age in seconds up to which a repeated step 1 --prepare uses its earlier snapshot again.
+snapshot_reuse=3600
+tab=$(printf '\t')
 
 # A line of a dry run goes to the first stdout, also from inside a command substitution.
 exec 3>&1
@@ -257,10 +321,14 @@ MADE = (
 OPTIONS = ("pangolin", "copilot")
 EDGE_NAMES = ("ok", "llm", "ov", "agent")
 PROVIDERS = ("manual", "porkbun", "route53", "cloudflare")
-# The option pangolin needs this pair on the host: Traefik makes the certificate with the
-# DNS-01 challenge through Porkbun. The two names are one text: the secret scan reads a
-# name after a comma as the value of the name before it.
-PORKBUN_PAIR = "EC2_PORKBUN_API_KEY EC2_PORKBUN_SECRET_KEY".split()
+# The names of a DNS provider block that the option pangolin needs on the host, for each
+# provider of the edge: Traefik makes the certificate with the DNS-01 challenge through
+# EC2_DNS_PROVIDER. The two Porkbun names are one text: the secret scan reads a name
+# after a comma as the value of the name before it.
+HOST_DNS_NAMES = {
+    "porkbun": "EC2_PORKBUN_API_KEY EC2_PORKBUN_SECRET_KEY".split(),
+    "cloudflare": ["EC2_CLOUDFLARE_DNS01_TOKEN"],
+}
 # A name that a Compose file refuses with no value: the form ${NAME:?text}.
 NEEDED = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?")
 # The settings that scripts/render-pangolin.sh needs. The bootstrap of the host runs that
@@ -364,9 +432,9 @@ def options(found):
     provider = found.get("EC2_DNS_PROVIDER", "") or "manual"
     if provider not in PROVIDERS:
         stop("EC2_DNS_PROVIDER is not one of these names: " + " ".join(PROVIDERS))
-    if "pangolin" in active and provider != "porkbun":
-        stop("the option pangolin needs EC2_DNS_PROVIDER=porkbun: its certificate uses the "
-             "DNS-01 challenge through Porkbun")
+    if "pangolin" in active and provider not in ("porkbun", "cloudflare"):
+        stop("the option pangolin needs EC2_DNS_PROVIDER=porkbun or cloudflare: its "
+             "certificate uses the DNS-01 challenge through that provider")
     print("options=%s" % shlex.quote(" ".join(active)))
     print("edge_names=%s" % shlex.quote(" ".join(edge)))
     print("dns_provider=%s" % shlex.quote(provider))
@@ -449,9 +517,10 @@ def secret(sample_path, out, allow, repo, apply):
     if apply == "1":
         stop("--apply needs EC2_VARIANT=macos")
     active = options(found)
-    pair = PORKBUN_PAIR if "pangolin" in active else []
+    provider = found.get("EC2_DNS_PROVIDER", "") or "manual"
+    pair = HOST_DNS_NAMES[provider] if "pangolin" in active else []
     # The names that need a value: Part 1, each empty name of the block of an active
-    # option, and the Porkbun pair with the option pangolin.
+    # option, and the host names of the DNS provider with the option pangolin.
     names = core + [name for _, kind, block, name in rows
                     if kind == "Option" and block in active and not sample.get(name)]
     names += [name for name in pair if name not in names]
@@ -467,11 +536,12 @@ def secret(sample_path, out, allow, repo, apply):
         settings += WEB_SEARCH_NAMES
     need = names + [name for name in dict.fromkeys(settings) if name not in names]
     # The names that do not go into the secret: each name of a DNS provider block. The
-    # Porkbun pair with the option pangolin is the one exception.
+    # host names of the DNS provider with the option pangolin are the one exception.
     provider_names = [name for _, kind, _, name in rows if kind == "DNS provider"]
     left_out = [name for name in found if name in provider_names and name not in pair]
     written = {name: value for name, value in found.items() if name not in left_out}
-    known = core + [name for _, kind, _, name in rows if kind == "Option"] + PORKBUN_PAIR
+    known = core + [name for _, kind, _, name in rows if kind == "Option"]
+    known += [name for names in HOST_DNS_NAMES.values() for name in names]
     allowed = allow.split()
     for name in allowed:
         if name not in known:
@@ -1616,7 +1686,7 @@ deploy_command() {
         --parameter-overrides \
         "Project=$project" \
         "InstanceType=$p_instance_type" \
-        "AmiParameter=$p_ami" \
+        "AmiId=$p_ami" \
         "VpcCidr=$p_vpc_cidr" \
         "AdminCidr=$p_admin_cidr" \
         "SshPublicKey=$p_ssh_key" \
@@ -1630,26 +1700,49 @@ deploy_command() {
         "EnableBucket=$p_bucket" \
         "EnableOperations=$p_operations" \
         "AlarmEmail=$p_alarm_email" \
-        "AlarmThreshold=$p_alarm_threshold"
+        "AlarmThreshold=$p_alarm_threshold" \
+        AttachInstance=true
 }
 
-# change_sets: print the id of each change set of the stack.
+# step1_command: the change set of step 1 of --replace-instance. The template is the
+# template of the stack ($stack_template), not the file of this checkout: so the change set
+# changes nothing but the two attachments. Each other parameter keeps its value in the stack.
+step1_command() {
+    as_provisioner cloudformation deploy \
+        --template-file "$stack_template" \
+        --stack-name "$stack" \
+        --capabilities CAPABILITY_NAMED_IAM \
+        --no-fail-on-empty-changeset \
+        --tags "Project=$project" \
+        --no-execute-changeset \
+        --parameter-overrides AttachInstance=false
+}
+
+# change_sets: print the name of each change set of the stack. A name is unique in the stack,
+# and it holds no account id (an ARN does).
 change_sets() {
     as_provisioner cloudformation list-change-sets --stack-name "$stack" \
-        --query 'Summaries[].ChangeSetId' --output text
+        --query 'Summaries[].ChangeSetName' --output text
 }
 
-# deploy_update: update a stack that exists. The change set is made first and shown.
-deploy_update() {
+# make_change_set <kind>: make the change set of the kind and set `change` to its name. The
+# kind step1 uses step1_command, each other kind deploy_command. A change set with no change
+# is deleted; `change` is then empty (the kind update), or the script stops (each other kind).
+make_change_set() {
+    kind=$1
     capture '' change_sets
     before=$captured
     say "making a change set for the stack $stack"
     # The CLI prints the ARN of the change set. The ARN holds the account id: no print.
-    deploy_command --no-execute-changeset >/dev/null
+    if [ "$kind" = step1 ]; then
+        step1_command >/dev/null
+    else
+        deploy_command --no-execute-changeset >/dev/null
+    fi
     capture '<the new change set>' change_sets
     change=$captured
     if [ "$dry" != 1 ]; then
-        # The new change set is the one id that the list did not hold before.
+        # The new change set is the one name that the list did not hold before.
         change=
         count=0
         for id in $captured; do
@@ -1663,7 +1756,7 @@ deploy_update() {
             fi
         done
         case $count in
-            0) echo "deploy: the stack $stack has no change"; return 0 ;;
+            0) no_change; change=; return 0 ;;
             1) ;;
             *) die "the stack $stack has $count new change sets; delete them and run deploy again" ;;
         esac
@@ -1678,65 +1771,205 @@ deploy_update() {
             --stack-name "$stack"
         case $reason in
             *"didn't contain changes"* | *"No updates are to be performed"*)
-                echo "deploy: the stack $stack has no change"
+                no_change
+                change=
                 return 0
                 ;;
         esac
         die "the change set has the status $change_status: $reason"
     fi
+}
+
+# check_changes <kind> <refusal>: show the change set $change and apply the stop rule of the
+# kind. The kind:
+#   update   the default deploy: no replacement of Instance; then the change set runs
+#   preview  part 0 of step 1 --prepare: the change set must replace Instance (True); it is
+#            shown and deleted, and nothing runs
+#   step1    the change set of step1_command: it must remove DataVolumeAttachment and
+#            ElasticIpAssociation and change nothing else
+#   step2    the change set must replace Instance (True)
+# Each kind refuses the removal of Instance, DataVolume, FileSystem or ElasticIp and the
+# replacement of DataVolume or FileSystem without --allow-remove. The refusal: delete (a
+# prepare step or the default deploy: the script made the change set in this run) or keep
+# (an execute step: the change set stays, and the message names its delete command).
+check_changes() {
+    kind=$1
     capture '' as_provisioner cloudformation describe-change-set \
         --change-set-name "$change" --stack-name "$stack" \
         --query 'Changes[].ResourceChange.[Action,LogicalResourceId,ResourceType,Replacement]' \
         --output text
     changes=$captured
     if [ "$dry" = 1 ]; then
-        note "show the change set; stop and delete it when it replaces the template resource Instance and --replace-instance is not given, or when it removes Instance, DataVolume, FileSystem or ElasticIp or replaces DataVolume or FileSystem and --allow-remove is not given"
-    else
-        say "the change set of the stack $stack"
-        printf 'Action\tTemplate resource\tType\tReplacement\n%s\n' "$changes"
-        # The stop rule. A line of `changes` is: the action, the template resource, the
-        # type, the replacement. A replacement is the value True or Conditional. The names
-        # are the names of `guarded`; `deploy` checks that the template has each of them.
-        #   replaced  the change set replaces Instance: the root volume is lost.
-        #   removed   the change set removes Instance, DataVolume, FileSystem or ElasticIp,
-        #             or it replaces DataVolume or FileSystem: the stack loses the data or
-        #             the address, and a new volume or file system is empty.
-        replaced=$(printf '%s\n' "$changes" | awk -F '\t' '
-            $1 != "Remove" && $2 == "Instance" && ($4 == "True" || $4 == "Conditional") { print $4 }')
-        removed=$(printf '%s\n' "$changes" | awk -F '\t' '
-            $1 == "Remove" && ($2 == "Instance" || $2 == "DataVolume" || $2 == "FileSystem" || $2 == "ElasticIp") {
-                printf "%sRemove %s", sep, $2; sep = ", "; next
-            }
-            ($2 == "DataVolume" || $2 == "FileSystem") && ($4 == "True" || $4 == "Conditional") {
-                printf "%sReplacement %s of %s", sep, $4, $2; sep = ", "
-            }')
-        refused=
-        options=
-        if [ -n "$replaced" ] && [ "$replace" != 1 ]; then
-            refused="it replaces the instance (Replacement $replaced)"
-            options=' --replace-instance'
-        fi
-        if [ -n "$removed" ] && [ "$allow_remove" != 1 ]; then
-            refused="${refused:+$refused; }it removes or replaces a resource that holds the data or the address ($removed)"
-            options="$options --allow-remove"
-        fi
-        if [ -n "$refused" ]; then
-            as_provisioner cloudformation delete-change-set --change-set-name "$change" \
-                --stack-name "$stack"
-            die "the change set is refused: $refused. Nothing is changed and the change set is deleted. To accept it: scripts/aws-host.sh deploy$options"
-        fi
-        [ -z "$replaced" ] || echo "Warning: this update replaces the instance (Replacement $replaced)."
-        [ -z "$removed" ] || echo "Warning: this update removes or replaces a resource that holds the data or the address: $removed."
+        case $kind in
+            update) note "show the change set; stop and delete it when it replaces the template resource Instance (only the two steps of --replace-instance accept that), or when it removes Instance, DataVolume, FileSystem or ElasticIp or replaces DataVolume or FileSystem and --allow-remove is not given" ;;
+            preview) note "show the change set; stop and delete it when it does not replace the template resource Instance (Replacement True), or when it removes or replaces a resource of the data or the address and --allow-remove is not given; then delete it: nothing runs" ;;
+            step1) note "show the change set; stop when it does not remove both DataVolumeAttachment and ElasticIpAssociation, or when it has any other change" ;;
+            step2) note "show the change set; stop when it does not replace the template resource Instance (Replacement True), or when it removes or replaces a resource of the data or the address and --allow-remove is not given" ;;
+        esac
+        return 0
     fi
-    say "running the change set"
+    say "the change set $change of the stack $stack"
+    printf 'Action\tTemplate resource\tType\tReplacement\n%s\n' "$changes"
+    # The stop rule. A line of `changes` is: the action, the template resource, the type,
+    # the replacement. A replacement is the value True or Conditional. The names are the
+    # names of `guarded`; `deploy` checks that the template has each of them.
+    #   replaced  the change set replaces Instance: the root volume is lost.
+    #   removed   the change set removes Instance, DataVolume, FileSystem or ElasticIp, or
+    #             it replaces DataVolume or FileSystem: the stack loses the data or the
+    #             address, and a new volume or file system is empty.
+    replaced=$(printf '%s\n' "$changes" | awk -F '\t' '
+        $1 != "Remove" && $2 == "Instance" && ($4 == "True" || $4 == "Conditional") { print $4 }')
+    removed=$(printf '%s\n' "$changes" | awk -F '\t' '
+        $1 == "Remove" && ($2 == "Instance" || $2 == "DataVolume" || $2 == "FileSystem" || $2 == "ElasticIp") {
+            printf "%sRemove %s", sep, $2; sep = ", "; next
+        }
+        ($2 == "DataVolume" || $2 == "FileSystem") && ($4 == "True" || $4 == "Conditional") {
+            printf "%sReplacement %s of %s", sep, $4, $2; sep = ", "
+        }')
+    refused=
+    accept=
+    case $kind in
+        update)
+            # Conditional with changes of the user data or the tags only: CloudFormation
+            # restarts an instance with an EBS root volume for its user data and does not
+            # replace it (the reference of AWS::EC2::Instance, UserData). Any other target
+            # of a Conditional replacement counts as a replacement.
+            restart=
+            if [ "$replaced" = Conditional ]; then
+                # shellcheck disable=SC2016
+                capture 'UserData' as_provisioner cloudformation describe-change-set \
+                    --change-set-name "$change" --stack-name "$stack" \
+                    --query 'Changes[?ResourceChange.LogicalResourceId==`Instance`].ResourceChange.Details[].Target.Name' \
+                    --output text
+                # Each instance type of the template has an EBS root volume; an instance store
+                # type would need a second look at this rule. An empty answer keeps the refusal.
+                targets=$(printf '%s\n' "$captured" | tr '\t' '\n' | awk 'NF && $1 != "UserData" && $1 != "Tags" && $1 != "None"')
+                known=$(printf '%s\n' "$captured" | tr '\t' '\n' | awk '$1 == "UserData" || $1 == "Tags"' | sort -u | tr '\n' ' ')
+                [ -n "$targets" ] || [ -z "$known" ] || restart=1
+            fi
+            if [ -n "$replaced" ] && [ -z "$restart" ]; then
+                refused="it replaces the instance (Replacement $replaced)"
+                # After step 1, the stack has AttachInstance=false: the next step is step 2.
+                stack_parameter AttachInstance
+                if [ "$value" = false ]; then
+                    accept=' --replace-instance --step 2 --prepare'
+                else
+                    accept=' --replace-instance --step 1 --prepare'
+                fi
+            fi
+            ;;
+        preview | step2)
+            # Conditional is not enough: an update that does not replace the instance
+            # would add the attachment to the old instance, which has no mount of it.
+            [ "$replaced" = True ] ||
+                refused="it does not replace the instance (Replacement ${replaced:-False}), so the two-step path does not apply. Use deploy without --replace-instance"
+            ;;
+        step1)
+            # Step 1 removes the two attachments and changes nothing else.
+            other=$(printf '%s\n' "$changes" | awk -F '\t' '
+                NF && !($1 == "Remove" && ($2 == "DataVolumeAttachment" || $2 == "ElasticIpAssociation")) {
+                    printf "%s%s %s", sep, $1, $2; sep = ", "
+                }')
+            both=$(printf '%s\n' "$changes" | awk -F '\t' '
+                $1 == "Remove" && ($2 == "DataVolumeAttachment" || $2 == "ElasticIpAssociation") { n++ }
+                END { print n + 0 }')
+            [ -z "$other" ] || refused="it has a change other than the removal of the two attachments ($other)"
+            [ "$both" = 2 ] ||
+                refused="${refused:+$refused; }it does not remove both DataVolumeAttachment and ElasticIpAssociation"
+            ;;
+    esac
+    if [ -n "$removed" ] && [ "$allow_remove" != 1 ]; then
+        refused="${refused:+$refused; }it removes or replaces a resource that holds the data or the address ($removed)"
+        accept="$accept --allow-remove"
+    fi
+    if [ -n "$refused" ]; then
+        if [ "$2" = keep ]; then
+            die "the change set $change of $kind is refused: $refused. It is not executed and it stays. To delete it: aws --profile $profile --region $region cloudformation delete-change-set --stack-name $stack --change-set-name $change. $(recovery_text)"
+        fi
+        as_provisioner cloudformation delete-change-set --change-set-name "$change" \
+            --stack-name "$stack"
+        case $kind in
+            update) die "the change set is refused: $refused. Nothing is changed and the change set is deleted. To accept it: scripts/aws-host.sh deploy$accept" ;;
+            *) die "the change set of $kind is refused: $refused. The change set is deleted. $(recovery_text)" ;;
+        esac
+    fi
+    if [ -n "$replaced" ] && [ "${restart:-}" = 1 ]; then
+        echo "Warning: this update restarts the instance for its user data or its tags (Replacement Conditional; targets: ${known% }). It does not replace it. The user data runs at the first boot only."
+    elif [ -n "$replaced" ]; then
+        echo "Warning: this update replaces the instance (Replacement $replaced)."
+    fi
+    [ -z "$removed" ] || echo "Warning: this update removes or replaces a resource that holds the data or the address: $removed."
+}
+
+# run_change_set: execute the change set $change and wait for the end of the update.
+run_change_set() {
+    say "running the change set $change"
     as_provisioner cloudformation execute-change-set --change-set-name "$change" \
         --stack-name "$stack"
     as_provisioner cloudformation wait stack-update-complete --stack-name "$stack" ||
-        die "the update of the stack $stack failed; read the events: aws cloudformation describe-stack-events --stack-name $stack"
+        die "the update of the stack $stack failed; read the events: aws cloudformation describe-stack-events --stack-name $stack. $(recovery_text)"
+}
+
+# deploy_update [<kind>]: update a stack that exists in one run: make the change set, show
+# it, apply the stop rule, then run it (update) or delete it (preview). See check_changes.
+deploy_update() {
+    make_change_set "${1:-update}"
+    [ -n "$change" ] || return 0
+    check_changes "$kind" delete
+    if [ "$kind" = preview ]; then
+        say "deleting the change set: step 1 only reads it"
+        as_provisioner cloudformation delete-change-set --change-set-name "$change" \
+            --stack-name "$stack"
+        return 0
+    fi
+    run_change_set
+}
+
+# named_change_set <kind>: the checks of an execute step on the change set $change that the
+# prepare step made. It must belong to the stack, wait with the status CREATE_COMPLETE and
+# the execution status AVAILABLE, have the AttachInstance value of its step (step1 false,
+# step2 true) and pass the stop rule of its step again. A refused change set stays.
+named_change_set() {
+    kind=$1
+    attach=true
+    [ "$kind" != step1 ] || attach=false
+    capture "$stack${tab}CREATE_COMPLETE${tab}AVAILABLE" as_provisioner cloudformation describe-change-set \
+        --change-set-name "$change" --stack-name "$stack" \
+        --query '[StackName,Status,ExecutionStatus]' --output text ||
+        die "the stack $stack has no change set $change. Nothing is executed. $(recovery_text)"
+    [ "$captured" = "$stack${tab}CREATE_COMPLETE${tab}AVAILABLE" ] ||
+        die "the change set $change is not a waiting change set of the stack $stack (stack, status, execution status: $(printf '%s' "$captured" | tr '\t' ' ')). Nothing is executed. $(recovery_text)"
+    capture "$attach" as_provisioner cloudformation describe-change-set \
+        --change-set-name "$change" --stack-name "$stack" \
+        --query "Parameters[?ParameterKey=='AttachInstance'].ParameterValue" --output text ||
+        die "describe-change-set failed"
+    [ "$captured" = "$attach" ] ||
+        die "the change set $change has AttachInstance=${captured:-<none>}; $kind needs AttachInstance=$attach. Nothing is executed. $(recovery_text)"
+    check_changes "$kind" keep
+}
+
+# no_change: the end of deploy_update for a change set with no change.
+no_change() {
+    [ "$kind" = update ] || die "the change set of $kind has no change. $(recovery_text)"
+    echo "deploy: the stack $stack has no change"
+}
+
+# recovery_text: the next step after a stop in deploy_update. The kind tells which part of
+# the two steps ran before the stop.
+recovery_text() {
+    case $kind in
+        update | preview) echo "Nothing is changed." ;;
+        step1)
+            echo "The services of the old host are stopped and $data_dir is unmounted. To start them again: one SSM command 'mount $data_dir && systemctl start docker.socket docker.service', then the bootstrap; or run step 1 --prepare again." ;;
+        step2)
+            echo "The data volume and the Elastic IP are not attached to an instance. To go back to the old instance: scripts/aws-host.sh current-image --write, then scripts/aws-host.sh deploy (it attaches both again), then restart the instance once so that it mounts $data_dir. Not verified: this path on a live stack." ;;
+    esac
 }
 
 # make_work: one private directory for the files of this run. The exit removes it.
 make_work() {
+    # One directory for each run: a second call keeps the first one.
+    [ -z "${work:-}" ] || return 0
     work=$(mktemp -d "${TMPDIR:-/tmp}/aws-host.XXXXXX")
     trap 'rm -rf "$work"' EXIT
     # In sh, a signal handler does not end the script; exit runs the EXIT trap. PIPE is in
@@ -1836,11 +2069,430 @@ EOT
     echo "exit \$rc"
 }
 
+# stack_parameter <name>: set `value` to the value of one parameter of the stack, or to
+# nothing when the stack has no such parameter. A dry run prints the call; `value` is then
+# <name of the stack>.
+stack_parameter() {
+    capture "<$1 of the stack>" as_provisioner cloudformation describe-stacks --stack-name "$stack" \
+        --query "Stacks[0].Parameters[?ParameterKey=='$1'].ParameterValue" --output text ||
+        die "describe-stacks failed"
+    value=$captured
+    [ "$value" != None ] || value=
+}
+
+# ssm_wait <timeout>: wait for the end of the SSM command $command_id on $instance. Set
+# `state` to its last status.
+ssm_wait() {
+    n=0
+    errors=0
+    while :; do
+        if state=$(as_provisioner ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$instance" --query Status --output text 2>&1); then
+            errors=0
+        else
+            # The invocation can need some seconds before SSM knows it.
+            errors=$((errors + 1))
+            [ "$errors" -lt 6 ] || die "get-command-invocation failed: $state"
+            state=Pending
+        fi
+        case $state in
+            Pending | InProgress | Delayed) ;;
+            *) break ;;
+        esac
+        n=$((n + 5))
+        [ "$n" -le $(($1 + 60)) ] ||
+            die "the command $command_id has no end after $n s"
+        sleep 5
+    done
+}
+
+# replace_commands: print the shell commands of part a of step 1 on the old host. They hold
+# no secret: a safe path, the mount point and fixed lines only. Each line that the helper
+# reads as a proof is a fixed text. A command prints no error text of Compose.
+replace_commands() {
+    case $project in
+        '' | *[!A-Za-z0-9_-]*) die "EC2_PROJECT is not a safe host directory name" ;;
+    esac
+    printf 'set +x\n'
+    printf 'echo "== step 1 of the instance replacement: the old host"\n'
+    # A second run of step 1 finds the volume unmounted: the first run exported the journal.
+    printf 'if mountpoint -q %s; then\n' "$data_dir"
+    # shellcheck disable=SC2016 # the shell of the host expands $stamp and $dir
+    printf '  stamp=$(date -u +%%Y%%m%%dT%%H%%M%%SZ); dir=%s/journal-before-replace/$stamp\n' "$data_dir"
+    # shellcheck disable=SC2016 # the shell of the host expands $dir
+    printf '  install -d -m 0700 "$dir" || { echo "replace: cannot make the journal directory: FAIL"; exit 1; }\n'
+    # shellcheck disable=SC2016 # the shell of the host expands $dir and $stamp
+    printf '  if python3 -I %s/scripts/host-journal-export.py --state "$dir/state" --logs "$dir/logs" >/dev/null 2>&1; then echo "replace: the host journal is in %s/journal-before-replace/$stamp"; else echo "replace: the journal export failed: FAIL (nothing is stopped)"; exit 1; fi\n' \
+        "$host_repo" "$data_dir"
+    printf 'else\n'
+    printf '  echo "%s"\n' "$not_mounted_line"
+    printf 'fi\n'
+    # Compose stops the containers in order, with their stop timeouts. systemd then stops
+    # the engine and its socket, so no socket start brings Docker back.
+    printf "if cd '%s' && timeout 300 docker compose stop >/dev/null 2>&1; then echo \"replace: the Compose services are stopped\"; else echo \"replace: docker compose stop failed; systemctl stops the containers\"; fi\n" "$host_repo"
+    printf 'systemctl stop docker.socket docker.service || { echo "replace: systemctl stop of Docker failed: FAIL"; exit 1; }\n'
+    printf 'if systemctl is-active --quiet docker.service; then echo "replace: Docker is still active: FAIL"; exit 1; fi\n'
+    printf 'echo "replace: Docker is stopped"\n'
+    printf 'sync\n'
+    # A failed umount names the processes that hold the mount (fuser -v writes to stderr).
+    printf 'if mountpoint -q %s; then umount %s || { echo "replace: umount %s failed: FAIL. The processes that use it (fuser -vm %s):"; fuser -vm %s 2>&1 || echo "replace: fuser gives no list"; exit 1; }; fi\n' \
+        "$data_dir" "$data_dir" "$data_dir" "$data_dir" "$data_dir"
+    printf 'if mountpoint -q %s; then echo "replace: %s is still mounted: FAIL"; exit 1; fi\n' "$data_dir" "$data_dir"
+    printf 'echo "%s"\n' "$unmount_proof"
+    printf 'exit 0\n'
+}
+
+# mount_commands: print the shell commands of the check of step 1 --execute on the old host:
+# the data volume is still unmounted, and Docker is still stopped. Fixed lines only.
+mount_commands() {
+    printf 'set +x\n'
+    printf 'if mountpoint -q %s; then echo "replace: %s is mounted again: FAIL"; exit 1; fi\n' "$data_dir" "$data_dir"
+    printf 'if systemctl is-active --quiet docker.service; then echo "replace: Docker is active again: FAIL"; exit 1; fi\n'
+    printf 'echo "%s"\n' "$still_unmounted"
+    printf 'exit 0\n'
+}
+
+# host_command <comment> <timeout> <proof>: send the commands of $work/commands to the
+# instance $instance with AWS-RunShellScript and wait for the end. Set `state` to the last
+# status and `host_output` to the output, and print the output. The status is 0 when the
+# status of the command is Success and the output has the line <proof>. A dry run prints
+# the commands and the calls.
+host_command() {
+    if [ "$dry" = 1 ]; then
+        note "the commands for the old host:"
+        sed 's/^/dry run:   /' "$work/commands" >&3
+        ssm_file='<temporary file: the commands above as JSON>'
+    else
+        ssm_file=$work/ssm.json
+        helper ssm "$ssm_file" "$2" <"$work/commands"
+    fi
+    capture '<command id>' as_provisioner ssm send-command \
+        --instance-ids "$instance" --document-name AWS-RunShellScript \
+        --comment "$project: $1" --parameters "file://$ssm_file" \
+        --query Command.CommandId --output text || die "send-command failed. $(recovery_text)"
+    command_id=$captured
+    if [ "$dry" = 1 ]; then
+        as_provisioner ssm get-command-invocation --command-id "$command_id" \
+            --instance-id "$instance"
+        note "wait for the end of the command; stop when its status is not Success or its output has no line: $3"
+        state=Success
+        host_output=$3
+        return 0
+    fi
+    ssm_wait "$2"
+    capture '' as_provisioner ssm get-command-invocation --command-id "$command_id" \
+        --instance-id "$instance" --query StandardOutputContent --output text ||
+        die "get-command-invocation failed"
+    host_output=$captured
+    printf '%s\n' "$host_output"
+    [ "$state" = Success ] && printf '%s\n' "$host_output" | grep -qxF -e "$3"
+}
+
+# recent_snapshot: set `snapshot` to the id of the newest completed snapshot of the data
+# volume $volume with the tag Name=<project>-data-before-replace, when it is younger than one
+# hour; else to nothing.
+recent_snapshot() {
+    snapshot=
+    capture '' as_provisioner ec2 describe-snapshots --owner-ids self \
+        --filters "Name=volume-id,Values=$volume" "Name=tag:Name,Values=$project-data-before-replace" \
+        Name=status,Values=completed \
+        --query 'reverse(sort_by(Snapshots,&StartTime))[0].[SnapshotId,StartTime]' --output text ||
+        die "describe-snapshots failed. Nothing is detached. $(kind=step1 recovery_text)"
+    [ "$dry" != 1 ] || return 0
+    id=${captured%%"$tab"*}
+    case $id in
+        snap-*) ;;
+        *) return 0 ;;
+    esac
+    age=$(python3 -I -c '
+import datetime as d, sys
+t = d.datetime.fromisoformat(sys.argv[1].strip().replace("Z", "+00:00"))
+if t.tzinfo is None:
+    t = t.replace(tzinfo=d.timezone.utc)
+print(int((d.datetime.now(d.timezone.utc) - t).total_seconds()))
+' "${captured#*"$tab"}" 2>/dev/null) || return 0
+    # Five minutes of clock difference are accepted.
+    if [ "$age" -ge -300 ] && [ "$age" -lt "$snapshot_reuse" ]; then
+        snapshot=$id
+    fi
+}
+
+# snapshot_data: part b of step 1: one snapshot of the data volume $volume, then the wait
+# for the state completed.
+snapshot_data() {
+    capture '<the snapshot id>' as_provisioner ec2 create-snapshot --volume-id "$volume" \
+        --description "$project: the data volume before an instance replacement" \
+        --tag-specifications "ResourceType=snapshot,Tags=[{Key=Project,Value=$project},{Key=Backup,Value=$project},{Key=Name,Value=$project-data-before-replace}]" \
+        --query SnapshotId --output text ||
+        die "create-snapshot failed. Nothing is detached. $(kind=step1 recovery_text)"
+    snapshot=$captured
+    case $snapshot in
+        snap-* | '<'*) ;;
+        *) die "create-snapshot gives no snapshot id. Nothing is detached. $(kind=step1 recovery_text)" ;;
+    esac
+    say "waiting for the snapshot $snapshot"
+    n=1
+    until as_provisioner ec2 wait snapshot-completed --snapshot-ids "$snapshot"; do
+        capture '' as_provisioner ec2 describe-snapshots --snapshot-ids "$snapshot" \
+            --query 'Snapshots[0].State' --output text || die "describe-snapshots failed"
+        [ "$captured" != error ] ||
+            die "the snapshot $snapshot has the state error. Nothing is detached. $(kind=step1 recovery_text)"
+        n=$((n + 1))
+        [ "$n" -le "$snapshot_waits" ] ||
+            die "the snapshot $snapshot is not completed after $snapshot_waits waits. Nothing is detached. Run step 1 --prepare again when it is completed: it uses the snapshot again for one hour."
+    done
+    echo "step 1: the snapshot $snapshot of the data volume is completed"
+}
+
+# attach_state <step>: the stack must have the AttachInstance value of the step: true before
+# step 1, false before step 2. Else the script stops and names the next step.
+attach_state() {
+    stack_parameter AttachInstance
+    [ "$dry" != 1 ] || return 0
+    case $1:$value in
+        1:true | 2:false) ;;
+        1:false) die "step 1 is done: the stack has AttachInstance=false. Next, on the owner word prepare: $again deploy --replace-instance --step 2 --prepare" ;;
+        2:true) die "step 1 is not done: the stack has AttachInstance=true. Run $again deploy --replace-instance --step 1 --prepare first" ;;
+        *) die "the stack $stack has no parameter AttachInstance: its template is older than the two-step path. First deploy the pinned image with no replacement: scripts/aws-host.sh current-image --write, then scripts/aws-host.sh deploy" ;;
+    esac
+}
+
+# prepared <step>: the end of a prepare step. The change set $change waits.
+prepared() {
+    allow=
+    [ "$allow_remove" = 0 ] || allow=' --allow-remove'
+    if [ "$dry" = 1 ]; then
+        note "a real run stops here. It prints the name of the change set and the execute command: $again deploy --replace-instance --step $1 --execute <the name of the change set>$allow"
+        return 0
+    fi
+    echo "step $1 prepare: pass. The change set $change waits. Nothing executes in this step."
+    echo "Next, after the owner word execute: $again deploy --replace-instance --step $1 --execute $change$allow"
+}
+
+# replace_step1 prepare|execute: step 1 of --replace-instance. See the usage text.
+replace_step1() {
+    attach_state 1
+    stack_outputs
+    output InstanceId '<InstanceId>'
+    instance=$value
+    [ -n "$instance" ] || die "the stack $stack has no output InstanceId"
+    output DataVolumeId '<DataVolumeId>'
+    volume=$value
+    [ -n "$volume" ] || die "the stack $stack has no output DataVolumeId"
+    make_work
+    if [ "$1" = execute ]; then
+        named_change_set step1
+        say "step 1, execute: $data_dir must still be unmounted on $instance"
+        mount_commands >"$work/commands"
+        host_command "replace step 1 check" "$check_timeout" "$still_unmounted" ||
+            die "step 1 stops: the command on the old host has the status $state, and its output does not prove that $data_dir is still unmounted. Nothing is executed and the change set $change stays. Run step 1 --prepare again: it stops the services and unmounts $data_dir again, then makes a new change set. To delete the old one: aws --profile $profile --region $region cloudformation delete-change-set --stack-name $stack --change-set-name $change"
+        run_change_set
+        capture 0 as_provisioner ec2 describe-volumes --volume-ids "$volume" \
+            --query 'length(Volumes[0].Attachments)' --output text || die "describe-volumes failed"
+        [ "$captured" = 0 ] ||
+            die "the data volume $volume still has an attachment after step 1. Do not run step 2. Read the events of the stack."
+        echo "step 1: pass. The data volume has no attachment. The site is down."
+        echo "Next, on the owner word prepare: $again deploy --replace-instance --step 2 --prepare"
+        return 0
+    fi
+    say "step 1, part 0: the change set of step 2 must replace the instance; it is shown and deleted"
+    deploy_update preview
+    say "step 1, part a: export the journal, stop Docker and unmount $data_dir on $instance"
+    replace_commands >"$work/commands"
+    host_command "replace step 1" "$replace_timeout" "$unmount_proof" ||
+        die "step 1 stops: the command on the old host has the status $state, and its output does not prove the unmount of $data_dir. Nothing is detached. $(kind=step1 recovery_text)"
+    say "step 1, part b: one snapshot of the data volume $volume"
+    snapshot=
+    if [ "$dry" = 1 ]; then
+        note "when the output has the line '$not_mounted_line', the newest completed snapshot of the data volume with the tag Name=$project-data-before-replace is used again when it is younger than one hour:"
+        recent_snapshot
+        note "else, a new snapshot:"
+    elif printf '%s\n' "$host_output" | grep -qxF -e "$not_mounted_line"; then
+        # No mount since an earlier run: a snapshot of that run holds the same data.
+        recent_snapshot
+    fi
+    if [ -n "$snapshot" ]; then
+        echo "step 1: the snapshot $snapshot of the data volume is completed and younger than one hour, and $data_dir was not mounted since; it is used again"
+    else
+        snapshot_data
+    fi
+    say "step 1, part c: the change set from the template of the stack with AttachInstance=false"
+    if [ "$dry" = 1 ]; then
+        as_provisioner cloudformation get-template --stack-name "$stack" --template-stage Original \
+            --query TemplateBody --output text
+        stack_template='<temporary file: the template of the stack>'
+        note "a real run stops here when the template of the stack has no parameter AttachInstance"
+    else
+        stack_template=$work/stack-template.yaml
+        as_provisioner cloudformation get-template --stack-name "$stack" --template-stage Original \
+            --query TemplateBody --output text >"$stack_template" || die "get-template failed"
+        grep -q '^  AttachInstance:$' "$stack_template" ||
+            die "the template of the stack $stack has no parameter AttachInstance. $(kind=step1 recovery_text)"
+    fi
+    make_change_set step1
+    check_changes step1 delete
+    [ "$dry" = 1 ] || echo "Warning: the services of the old host are stopped and $data_dir is unmounted. The site is down."
+    prepared 1
+}
+
+# replace_step2 prepare|execute: step 2 of --replace-instance. See the usage text.
+replace_step2() {
+    attach_state 2
+    if [ "$1" = prepare ]; then
+        make_change_set step2
+        check_changes step2 delete
+        prepared 2
+        return 0
+    fi
+    stack_outputs
+    output InstanceId '<InstanceId>'
+    old_instance=$value
+    named_change_set step2
+    run_change_set
+    stack_outputs
+    output InstanceId '<the new InstanceId>'
+    instance=$value
+    output DataVolumeId '<DataVolumeId>'
+    volume=$value
+    output ElasticIp '<ElasticIp>'
+    address=$value
+    if [ "$dry" != 1 ] && { [ -z "$instance" ] || [ "$instance" = "$old_instance" ]; }; then
+        die "the stack $stack has no new instance after step 2"
+    fi
+    capture "$instance${tab}attached" as_provisioner ec2 describe-volumes --volume-ids "$volume" \
+        --query 'Volumes[0].Attachments[0].[InstanceId,State]' --output text || die "describe-volumes failed"
+    [ "$captured" = "$instance${tab}attached" ] ||
+        die "the data volume $volume is not attached to the new instance $instance"
+    echo "step 2: the data volume is attached to the new instance $instance"
+    capture "$instance" as_provisioner ec2 describe-addresses --public-ips "$address" \
+        --query 'Addresses[0].InstanceId' --output text || die "describe-addresses failed"
+    [ "$captured" = "$instance" ] ||
+        die "the Elastic IP is not on the new instance $instance"
+    echo "step 2: the Elastic IP is on the new instance $instance"
+    echo "step 2: pass. The DNS records stay correct: the address is the same."
+    echo "Next: wait for the end of the first boot and the bootstrap, then scripts/aws-host.sh verify"
+}
+
+# dry_step <step>: the dry run of one step. --prepare or --execute prints that form only;
+# else the dry run prints both forms, and a real run stops and names them.
+dry_step() {
+    if [ "$prepare" = 1 ]; then
+        note "step $1, prepare: $again deploy --replace-instance --step $1 --prepare"
+        "replace_step$1" prepare
+    elif [ -n "$execute" ]; then
+        note "step $1, execute: $again deploy --replace-instance --step $1 --execute $execute"
+        change=$execute
+        "replace_step$1" execute
+    else
+        [ -z "$step" ] || note "a real run stops here: a step needs --prepare or --execute <name>"
+        note "step $1, prepare: $again deploy --replace-instance --step $1 --prepare"
+        "replace_step$1" prepare
+        note "step $1, execute (after the owner word execute): $again deploy --replace-instance --step $1 --execute <name>"
+        change='<the name of the change set that the prepare printed>'
+        "replace_step$1" execute
+    fi
+}
+
+# write_pairs <pairs>: set the NAME=value lines of <pairs> in the environment file. A name
+# that the file lacks goes to the end of the outputs part. The file keeps its mode.
+write_pairs() {
+    [ "$env_file" != "$sample" ] ||
+        die "--write does not change the sample environment file"
+    [ ! -L "$env_file" ] || die "--write does not change a symbolic link: $env_file"
+    new=$(mktemp "$env_file.XXXXXX")
+    # The copy holds each value of the file: an exit before the move removes it.
+    trap 'rm -f "$new"' EXIT
+    trap 'exit 130' INT TERM HUP PIPE QUIT
+    # The file is read two times: first for the names that it holds, then for
+    # the copy. A name that the file lacks goes to the end of the outputs part.
+    AWS_HOST_PAIRS=$1 awk '
+    # The reader of the file accepts blanks before a name. Without the same
+    # rule here, such a name gets a second line, and the reader then refuses
+    # the file.
+    function key_of(line) {
+        sub(/^[ \t]+/, "", line)
+        if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/) return ""
+        sub(/=.*$/, "", line)
+        return line
+    }
+    function add_missing(    i) {
+        for (i = 1; i <= n; i++) {
+            if (name[i] == "" || name[i] in present) continue
+            print name[i] "=" val[name[i]]
+            present[name[i]] = 1
+        }
+    }
+    BEGIN {
+        marker = "# The outputs of the stack."
+        n = split(ENVIRON["AWS_HOST_PAIRS"], pair, "\n")
+        for (i = 1; i <= n; i++) {
+            name[i] = key_of(pair[i])
+            val[name[i]] = substr(pair[i], length(name[i]) + 2)
+        }
+    }
+    NR == FNR {
+        key = key_of($0)
+        if (key != "") present[key] = 1
+        next
+    }
+    {
+        if (in_part && $0 ~ /^[ \t]*$/) { add_missing(); in_part = 0 }
+        key = key_of($0)
+        if (key != "" && key in val) { print key "=" val[key]; next }
+        if (index($0, marker) == 1) { in_part = 1; has_marker = 1 }
+        print
+    }
+    END {
+        if (in_part) add_missing()
+        if (has_marker) exit
+        for (i = 1; i <= n; i++) {
+            if (name[i] == "" || name[i] in present) continue
+            print ""
+            print marker " `scripts/aws-host.sh outputs --write` sets each value."
+            add_missing()
+            break
+        }
+    }' "$env_file" "$env_file" >"$new" || { rm -f "$new"; die "cannot write $env_file"; }
+    # mktemp gives the copy the mode 0600. The file keeps the mode that it had.
+    helper mode "$env_file" "$new"
+    mv -f "$new" "$env_file"
+}
+
+# image_result <current|new>: print the image id of current-image or new-image, compare it
+# with EC2_AMI_ID and write it with --write.
+image_result() {
+    if [ "$dry" != 1 ]; then
+        printf '%s\n' "$image" | grep -Eqx 'ami-[0-9a-f]{8,17}' ||
+            die "the reply is not an image id of the form ami-<hexadecimal digits>"
+    fi
+    echo "EC2_AMI_ID=$image"
+    setting EC2_AMI_ID ''
+    if [ "$dry" = 1 ]; then
+        :
+    elif [ "$value" = "$image" ]; then
+        echo "$1-image: EC2_AMI_ID of $env_file has this value"
+    elif [ "$1" = current ]; then
+        echo "$1-image: with this value, a deploy replaces nothing for the image"
+    else
+        echo "$1-image: with this value, the next deploy replaces the instance: scripts/aws-host.sh deploy --replace-instance --step 1 --prepare, then --step 1 --execute <name>, then the same two forms of --step 2, each on its owner word"
+    fi
+    [ "$write" = 1 ] || return 0
+    if [ "$dry" = 1 ]; then
+        note "set EC2_AMI_ID in $env_file to the image id"
+    elif [ "$value" != "$image" ]; then
+        write_pairs "EC2_AMI_ID=$image"
+        echo "$1-image: set in $env_file: EC2_AMI_ID"
+    fi
+}
+
 dry=0
 apply=0
 env_file=
 command=
 replace=0
+step=
+prepare=0
+execute=
 allow_remove=0
 write=0
 plan=0
@@ -1858,6 +2510,19 @@ while [ $# -gt 0 ]; do
             ;;
         --env-file=*) env_file=${1#--env-file=} ;;
         --replace-instance) replace=1 ;;
+        --step)
+            [ $# -ge 2 ] || die "--step needs 1 or 2"
+            step=$2
+            shift
+            ;;
+        --step=*) step=${1#--step=} ;;
+        --prepare) prepare=1 ;;
+        --execute)
+            [ $# -ge 2 ] || die "--execute needs the name of the change set that --prepare printed"
+            execute=$2
+            shift
+            ;;
+        --execute=*) execute=${1#--execute=} ;;
         --allow-remove) allow_remove=1 ;;
         --write) write=1 ;;
         --plan) plan=1 ;;
@@ -1886,13 +2551,35 @@ while [ $# -gt 0 ]; do
 done
 
 case $command in
-    deploy | outputs | secret | generated-status | dns | verify | host-allocate | host-release | stop | start | session | tunnel | ssh | host-bootstrap | recovery-check) ;;
+    deploy | outputs | current-image | new-image | secret | generated-status | dns | verify | host-allocate | host-release | stop | start | session | tunnel | ssh | host-bootstrap | recovery-check) ;;
     *) usage >&2; exit 2 ;;
 esac
 [ "$apply$dry" != 11 ] || die "--apply and --dry-run conflict"
 [ "$replace" = 0 ] || [ "$command" = deploy ] || die "--replace-instance is an option of deploy"
 [ "$allow_remove" = 0 ] || [ "$command" = deploy ] || die "--allow-remove is an option of deploy"
-[ "$write" = 0 ] || [ "$command" = outputs ] || die "--write is an option of outputs"
+case $step in
+    '' | 1 | 2) ;;
+    *) die "--step needs 1 or 2" ;;
+esac
+[ -z "$step" ] || [ "$replace" = 1 ] || die "--step is an option of deploy --replace-instance"
+# The words prepare and execute belong to a step of --replace-instance. The plain deploy
+# keeps its one run: it makes, shows, checks and runs its change set.
+if [ "$prepare" = 1 ] || [ -n "$execute" ]; then
+    [ -n "$step" ] || die "--prepare and --execute are options of deploy --replace-instance --step 1|2"
+    [ "$prepare" = 0 ] || [ -z "$execute" ] || die "--prepare and --execute conflict"
+fi
+if [ -n "$execute" ]; then
+    case $execute in
+        [A-Za-z]*) ;;
+        *) die "--execute needs the name of the change set that --prepare printed, not an ARN" ;;
+    esac
+    case $execute in
+        *[!A-Za-z0-9-]*) die "--execute needs the name of the change set that --prepare printed, not an ARN" ;;
+    esac
+    [ "${#execute}" -le 128 ] || die "--execute needs the name of the change set that --prepare printed"
+fi
+[ "$write" = 0 ] || [ "$command" = outputs ] || [ "$command" = current-image ] || [ "$command" = new-image ] ||
+    die "--write is an option of outputs, current-image and new-image"
 [ "$plan" = 0 ] || [ "$command" = dns ] || die "--plan is an option of dns"
 [ "$lockdown" = 0 ] || [ "$command" = host-bootstrap ] || die "--lockdown is an option of host-bootstrap"
 [ -z "$allow_empty" ] || [ "$command" = secret ] || die "--allow-empty is an option of secret"
@@ -1971,7 +2658,8 @@ case $command in
         done
         setting EC2_INSTANCE_TYPE t3a.large
         p_instance_type=$value
-        setting EC2_AMI_SSM_PARAMETER /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+        # The pinned image. An update with the same value replaces nothing for the image.
+        setting EC2_AMI_ID ''
         p_ami=$value
         required EC2_VPC_CIDR
         p_vpc_cidr=$value
@@ -2030,16 +2718,41 @@ case $command in
                 ;;
         esac
         stop_on_missing
+        ami_help="Fill it with one of two commands: scripts/aws-host.sh current-image --write (the image of the running instance of the stack: the update replaces nothing) or scripts/aws-host.sh new-image --write (the newest image of EC2_AMI_SSM_PARAMETER: the next deploy replaces the instance)"
+        if [ -z "$p_ami" ]; then
+            [ "$dry" = 1 ] || die "EC2_AMI_ID is empty. $ami_help"
+            note "a real run stops here: EC2_AMI_ID is empty. $ami_help"
+            p_ami='<EC2_AMI_ID>'
+        elif [ "$dry" != 1 ] && ! printf '%s\n' "$p_ami" | grep -Eqx 'ami-[0-9a-f]{8,17}'; then
+            die "EC2_AMI_ID is not an image id of the form ami-<hexadecimal digits>. $ami_help"
+        fi
+        # The command for the next step names the same environment file.
+        again=scripts/aws-host.sh
+        [ "$env_file" = "$top/.env" ] || again="$again --env-file $env_file"
+        replace_help="--replace-instance has two steps, each with two owner words, prepare and then execute: $again deploy --replace-instance --step 1 --prepare, then $again deploy --replace-instance --step 1 --execute <name>, then the same two forms with --step 2. Read docs/reference/deploy-script.md first."
+        # A step of the replacement needs its owner word: no AWS call before this test.
+        [ "$dry" = 1 ] || [ "$replace" = 0 ] || [ "$prepare" = 1 ] || [ -n "$execute" ] || die "$replace_help"
         stack_status
         if [ "$dry" = 1 ]; then
             note "the options of EC2_OPTIONS: ${options:-none}"
-            note "when no stack has the name $stack, the first deploy:"
-            deploy_command
-            note "when the stack $stack exists, an update:"
-            deploy_update
+            case $replace:$step in
+                1:1 | 1:2) dry_step "$step" ;;
+                1:)
+                    note "deploy --replace-instance has two steps; each step has two runs with their own owner words: prepare, then execute"
+                    dry_step 1
+                    dry_step 2
+                    ;;
+                *)
+                    note "when no stack has the name $stack, the first deploy:"
+                    deploy_command
+                    note "when the stack $stack exists, an update:"
+                    deploy_update
+                    ;;
+            esac
         else
             case $status in
                 '' | REVIEW_IN_PROGRESS)
+                    [ "$replace" = 0 ] || die "no stack has the name $stack: --replace-instance needs a stack"
                     say "creating the stack $stack with the profile $profile"
                     deploy_command
                     ;;
@@ -2050,6 +2763,20 @@ case $command in
                     die "the stack $stack has the status $status: no deploy now"
                     ;;
                 *)
+                    case $replace:$step:$prepare:$execute in
+                        1:[12]:1:)
+                            say "step $step of 2 of the instance replacement of the stack $stack ($status) with the profile $profile: prepare"
+                            "replace_step$step" prepare
+                            exit 0
+                            ;;
+                        1:[12]:0:?*)
+                            say "step $step of 2 of the instance replacement of the stack $stack ($status) with the profile $profile: execute $execute"
+                            change=$execute
+                            "replace_step$step" execute
+                            exit 0
+                            ;;
+                        1:*) die "$replace_help" ;;
+                    esac
                     say "updating the stack $stack ($status) with the profile $profile"
                     deploy_update
                     ;;
@@ -2082,70 +2809,29 @@ case $command in
             elif [ "$dry" = 1 ]; then
                 note "set these names in $env_file: $(printf '%s' "$pairs" | tr '\n' ' ')"
             else
-                [ "$env_file" != "$sample" ] ||
-                    die "--write does not change the sample environment file"
-                [ ! -L "$env_file" ] || die "--write does not change a symbolic link: $env_file"
-                new=$(mktemp "$env_file.XXXXXX")
-                # The copy holds each value of the file: an exit before the move removes it.
-                trap 'rm -f "$new"' EXIT
-                trap 'exit 130' INT TERM HUP PIPE QUIT
-                # The file is read two times: first for the names that it holds, then for
-                # the copy. A name that the file lacks goes to the end of the outputs part.
-                AWS_HOST_PAIRS=$pairs awk '
-                # The reader of the file accepts blanks before a name. Without the same
-                # rule here, such a name gets a second line, and the reader then refuses
-                # the file.
-                function key_of(line) {
-                    sub(/^[ \t]+/, "", line)
-                    if (line !~ /^[A-Za-z_][A-Za-z0-9_]*=/) return ""
-                    sub(/=.*$/, "", line)
-                    return line
-                }
-                function add_missing(    i) {
-                    for (i = 1; i <= n; i++) {
-                        if (name[i] == "" || name[i] in present) continue
-                        print name[i] "=" val[name[i]]
-                        present[name[i]] = 1
-                    }
-                }
-                BEGIN {
-                    marker = "# The outputs of the stack."
-                    n = split(ENVIRON["AWS_HOST_PAIRS"], pair, "\n")
-                    for (i = 1; i <= n; i++) {
-                        name[i] = key_of(pair[i])
-                        val[name[i]] = substr(pair[i], length(name[i]) + 2)
-                    }
-                }
-                NR == FNR {
-                    key = key_of($0)
-                    if (key != "") present[key] = 1
-                    next
-                }
-                {
-                    if (in_part && $0 ~ /^[ \t]*$/) { add_missing(); in_part = 0 }
-                    key = key_of($0)
-                    if (key != "" && key in val) { print key "=" val[key]; next }
-                    if (index($0, marker) == 1) { in_part = 1; has_marker = 1 }
-                    print
-                }
-                END {
-                    if (in_part) add_missing()
-                    if (has_marker) exit
-                    for (i = 1; i <= n; i++) {
-                        if (name[i] == "" || name[i] in present) continue
-                        print ""
-                        print marker " `scripts/aws-host.sh outputs --write` sets each value."
-                        add_missing()
-                        break
-                    }
-                }' "$env_file" "$env_file" >"$new" || { rm -f "$new"; die "cannot write $env_file"; }
-                # mktemp gives the copy the mode 0600. The file keeps the mode that it had.
-                helper mode "$env_file" "$new"
-                mv -f "$new" "$env_file"
+                write_pairs "$pairs"
                 echo "outputs: set in $env_file: $(printf '%s' "$pairs" | sed 's/=.*$//' | tr '\n' ' ')"
                 echo "Next: scripts/aws-host.sh secret < $env_file, so that the secret has the new values"
             fi
         fi
+        ;;
+    current-image)
+        stack_outputs
+        output InstanceId '<InstanceId>'
+        instance=$value
+        [ -n "$instance" ] || die "the stack $stack has no output InstanceId"
+        capture '<the image id of the instance>' as_provisioner ec2 describe-instances \
+            --instance-ids "$instance" --query 'Reservations[0].Instances[0].ImageId' --output text ||
+            die "describe-instances failed"
+        image=$captured
+        image_result current
+        ;;
+    new-image)
+        setting EC2_AMI_SSM_PARAMETER /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+        capture '<the image id of the parameter>' as_provisioner ssm get-parameter --name "$value" \
+            --query Parameter.Value --output text || die "get-parameter failed"
+        image=$captured
+        image_result new
         ;;
     secret)
         if [ -n "$secret_problems" ]; then
@@ -2253,27 +2939,7 @@ case $command in
             note "wait for the end of the command, then print its output and its status"
             exit 0
         fi
-        n=0
-        errors=0
-        while :; do
-            if state=$(as_provisioner ssm get-command-invocation --command-id "$command_id" \
-                --instance-id "$instance" --query Status --output text 2>&1); then
-                errors=0
-            else
-                # The invocation can need some seconds before SSM knows it.
-                errors=$((errors + 1))
-                [ "$errors" -lt 6 ] || die "get-command-invocation failed: $state"
-                state=Pending
-            fi
-            case $state in
-                Pending | InProgress | Delayed) ;;
-                *) break ;;
-            esac
-            n=$((n + 5))
-            [ "$n" -le $((verify_timeout + 60)) ] ||
-                die "the command $command_id has no end after $n s"
-            sleep 5
-        done
+        ssm_wait "$verify_timeout"
         # SSM keeps the first 24000 characters of each stream.
         as_provisioner ssm get-command-invocation --command-id "$command_id" \
             --instance-id "$instance" --query StandardOutputContent --output text

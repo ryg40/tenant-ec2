@@ -35,7 +35,7 @@ Each setting is a name of the environment file `.env` of the development machine
 | `EC2_OPTIONS` | A list of option names with commas and no blank. The known names are `pangolin` and `copilot`. | empty |
 | `EC2_DNS_PROVIDER` | `manual`, `porkbun`, `route53` or `cloudflare`. | `manual` |
 
-A name that a script does not know stops the script. The option `pangolin` needs the provider `porkbun` (section "The option pangolin").
+A name that a script does not know stops the script. The option `pangolin` needs the provider `porkbun` or `cloudflare` (section "The option pangolin").
 
 ## The commands
 
@@ -66,7 +66,7 @@ A credential of a DNS provider stays on the development machine. It is in `.env`
 
 The reason: the host is public. A DNS key on the host lets an attacker of the host change the records of the zone. Then the attacker points a name to another server and gets a valid certificate for it.
 
-The one exception is the Porkbun pair with the option `pangolin` (section "The option pangolin").
+The one exception is the host credential of the DNS provider with the option `pangolin`: the Porkbun pair, or the Cloudflare host token (section "The option pangolin").
 
 ## The provider manual
 
@@ -176,13 +176,29 @@ A name with more than one A record stops the script. Delete each record but one 
 
 ## The option pangolin
 
-The Pangolin edge makes one wildcard certificate with the DNS-01 challenge through Porkbun. So the option `pangolin` needs `EC2_DNS_PROVIDER=porkbun`. `scripts/aws-host.sh` and `scripts/dns-records.sh` stop with another provider; the bootstrap requires the Porkbun pair. The page [Pangolin edge](pangolin.md) gives the steps of the option.
+The Pangolin edge makes one wildcard certificate with the DNS-01 challenge through the provider of `EC2_DNS_PROVIDER`. So the option `pangolin` needs `EC2_DNS_PROVIDER=porkbun` or `EC2_DNS_PROVIDER=cloudflare`. `scripts/aws-host.sh` and `scripts/dns-records.sh` stop with another provider. `scripts/render-pangolin.sh` writes the provider into the resolver of the Traefik file. The page [Pangolin edge](pangolin.md) gives the steps of the option.
 
-Porkbun must answer for the domain before the certificate can exist. When another provider answers for it, move the complete zone first: the page [DNS migration](../reference/dns-migration.md) gives the procedure.
+The provider must answer for the domain before the certificate can exist: its name servers are the authoritative name servers of the apex domain. Read them with `dig NS <apex domain> @1.1.1.1`. The challenge record of another provider is never public, so each order fails.
 
-With this option, the Porkbun pair goes into the Secrets Manager secret: the edge needs it on the host. `scripts/aws-host.sh secret` then needs a value for the two names.
+| Provider | Names on the host | Smallest scope |
+| --- | --- | --- |
+| `porkbun` | `EC2_PORKBUN_API_KEY`, `EC2_PORKBUN_SECRET_KEY` | One key pair with API access on for the one domain. The pair changes each record of the whole domain. |
+| `cloudflare` | `EC2_CLOUDFLARE_DNS01_TOKEN` | One new API token with the permissions Zone Read and DNS Edit, and the one zone of the apex domain as its only zone resource. |
 
-Warning: with the option `pangolin`, a DNS key for the whole Porkbun domain is on the public host. Keep API access off for each other domain of the account.
+With this option, the names of the provider go into the Secrets Manager secret: the edge needs them on the host. `scripts/aws-host.sh secret` then needs a value for them. It leaves out each name of another provider block, and with `cloudflare` also `EC2_CLOUDFLARE_API_TOKEN` and `EC2_CLOUDFLARE_ZONE_ID`: those two stay on the development machine for the `dns` command. Step 2 of the bootstrap stops when a name of the provider has no value.
+
+Traefik passes the Cloudflare host token to its DNS provider (lego `cloudflare`) as `CF_DNS_API_TOKEN` and `CF_ZONE_API_TOKEN` (`compose.pangolin.yaml`). The lego documentation of the provider lists DNS Edit for the first name and Zone Read for the second name, and one token with both permissions on the zone serves both names.
+
+To make the Cloudflare host token:
+
+1. In the Cloudflare dashboard, make a custom API token.
+2. Give it two permissions: Zone, Zone, Read and Zone, DNS, Edit.
+3. Under "Zone Resources", select the one zone of the apex domain. Select no other zone.
+4. Store the token with the credential helper. Set `EC2_CLOUDFLARE_DNS01_TOKEN` in `.env`.
+
+Warning: with the option `pangolin`, a DNS key is on the public host. With `porkbun`, the key changes each record of the whole Porkbun domain: keep API access off for each other domain of the account. With `cloudflare`, the token changes each record of the one zone. Make the host token new: do not use the token of the `dns` command or a token of another deployment.
+
+The page [DNS migration](../reference/dns-migration.md) moves the complete zone to Porkbun. That is one path. The Cloudflare resolver is the other path: the zone stays at Cloudflare.
 
 ## Not verified
 
@@ -192,4 +208,5 @@ No real call to a DNS provider ran. Each test used a stub of the tool with a fak
 - Not verified: an identity with only the two IAM statements above passes the two Route 53 calls.
 - Not verified: the AWS CLI needs no region for a Route 53 call.
 - Not verified: a Cloudflare token with only the permission Zone, DNS, Edit on one zone passes the three requests.
+- Not verified: the Cloudflare host token with Zone Read and DNS Edit on one zone passes the DNS-01 challenge of Traefik. No order ran with it.
 - Not verified: the names of the pages and of the fields in the Porkbun account and in the Cloudflare dashboard.

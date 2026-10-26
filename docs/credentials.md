@@ -101,7 +101,8 @@ These values are not credentials. They still identify a deployment and must stay
 | `EC2_LITELLM_UI_USERNAME` | Gateway UI user. | Choose a deployment-specific user. This is not a model key. |
 | `EC2_AWS_REGION` | AWS region. | Select a region allowed by the provisioner and the model. |
 | `EC2_STACK_NAME` | Host stack name. | Keep the provisioner prefix. |
-| `EC2_AMI_SSM_PARAMETER` | Amazon Linux image parameter. | Use the public x86_64 parameter from the template. |
+| `EC2_AMI_SSM_PARAMETER` | Amazon Linux image parameter of `new-image`. | Use the public x86_64 parameter. |
+| `EC2_AMI_ID` | The pinned image id of the host. | Set it with `scripts/aws-host.sh current-image --write` or `new-image --write`. |
 | `EC2_INSTANCE_TYPE` | Host instance size. | Choose enough memory for all active services. |
 | `EC2_BEDROCK_LUNA_MODEL` | Bedrock inference profile. | Use the profile allowed by the instance role. Keep reasoning effort at `xhigh`. |
 | `EC2_BEDROCK_EMBED_MODEL` | Bedrock embedding model. | Use the model allowed by the role; the core selects Titan Text Embeddings V2. |
@@ -129,7 +130,7 @@ These values are not credentials. They still identify a deployment and must stay
 
 ## Optional names
 
-An option needs its values only when enabled. DNS credentials stay on the development machine, except the Porkbun pair for Pangolin DNS-01.
+An option needs its values only when enabled. DNS credentials stay on the development machine, except the host names of the provider for Pangolin DNS-01: the Porkbun pair or the Cloudflare host token.
 
 | Name | Purpose | How to make it and smallest scope |
 | --- | --- | --- |
@@ -143,6 +144,7 @@ An option needs its values only when enabled. DNS credentials stay on the develo
 | `EC2_PORKBUN_SECRET_KEY` | DNS API secret. | Use the matching pair. It can still change each record of the authorized domain. |
 | `EC2_CLOUDFLARE_API_TOKEN` | DNS API credential. | Allow DNS edits on one zone only. Keep it on the development machine. |
 | `EC2_CLOUDFLARE_ZONE_ID` | DNS zone identifier, not a secret. | Use the one zone of the token. Keep it off the host. |
+| `EC2_CLOUDFLARE_DNS01_TOKEN` | Pangolin DNS-01 credential with `cloudflare`. | Make a new token for the host: Zone Read and DNS Edit on the one zone of the apex domain. It goes to the host. |
 | `EC2_ROUTE53_PROFILE` | Installer AWS profile name, not a secret. | Allow record reads for one zone and UPSERT of the selected A records only. Use no provisioner profile. |
 | `EC2_ROUTE53_HOSTED_ZONE_ID` | DNS hosted zone identifier, not a secret. | Use the one zone allowed by the profile. Keep it off the host. |
 | `EC2_KIT_SOURCE_PI_DURABLE` | Private source override. | Use a reviewed HTTPS repository URL without credentials. Keep the lock pin unchanged. |
@@ -158,11 +160,11 @@ The provider and gate changes can add names. Their environment blocks define tho
 
 The Copilot device login, Pangolin administrator password and Newt site credential are not environment names of the core.
 
-DNS provider names stay off the host, except the Porkbun pair with `pangolin`.
+DNS provider names stay off the host, except the host names of the provider with `pangolin`.
 The [DNS page](options/dns.md) gives the required provider rights.
 
 Warning: a private clone token can remain in the host secret. Limit its scope and review removal after use.
-Warning: Pangolin needs the Porkbun pair for certificate renewal. Keep its scope limited to the required domain.
+Warning: Pangolin needs the credential of its DNS provider for certificate renewal. Keep its scope limited to the required domain or zone.
 
 ## Owner records
 

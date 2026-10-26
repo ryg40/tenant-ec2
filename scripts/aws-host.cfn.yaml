@@ -16,7 +16,9 @@ Description: >-
 # Parameters:
 #   Project             the name prefix; the default is tenant-ec2
 #   InstanceType        the default is t3a.large; m7i-flex.xlarge when a build has no memory
-#   AmiParameter        the public SSM parameter of the Amazon Linux 2023 x86_64 image
+#   AmiId               the pinned image id of Amazon Linux 2023 x86_64; no default. The
+#                       environment file holds it as EC2_AMI_ID. A new value replaces
+#                       the instance.
 #   VpcCidr             the private IPv4 range of the VPC; no default, because the scan of
 #                       this repository refuses a private address in a tracked file
 #   AdminCidr           the one IPv4 range that reaches SSH; no default; the prefix length
@@ -35,6 +37,9 @@ Description: >-
 #   EnableOperations    false (default) or true; see "Waits on the provisioner stack"
 #   AlarmEmail          the address of the billing alarm; only with EnableOperations true
 #   AlarmThreshold      the limit of the billing alarm in USD; only with EnableOperations true
+#   AttachInstance      true (default) or false; false removes the data volume attachment
+#                       and the address association. Only step 1 of the instance
+#                       replacement of the deploy script sets false.
 #
 # Waits on the provisioner stack. The provisioner policy and the boundary are in
 # scripts/aws-provisioner.cfn.yaml, and `scripts/aws-provisioner.sh deploy` deploys them.
@@ -57,6 +62,14 @@ Description: >-
 #   - CloudFormation makes the bucket name from the stack name, so it starts with the
 #     project. The name holds no account id.
 #   - Do not change VpcCidr after the first deploy: a new range replaces the VPC.
+#   - An update that replaces the instance in one change set fails at the attachment of the
+#     data volume: CloudFormation makes the new attachment while the old instance holds the
+#     volume (proven live on 2026-10-26). So the deploy script replaces the instance in two
+#     change sets: step 1 sets AttachInstance false, step 2 sets it true with the new image.
+#   - The image is pinned (AmiId). An update does not read a public parameter again, so
+#     only a new AmiId, or another property that needs a replacement, replaces the instance.
+#     A change of the user data alone stops and starts the instance (an EBS root volume)
+#     and does not replace it: the CloudFormation reference of UserData says so.
 #   - The EFS access points use these POSIX ids: open-knowledge 10001 (the pinned image),
 #     openviking 1101, shared 1102. Each root directory has the mode 0750.
 #     OpenViking and shared keep their enforced EFS identities; no runtime UID changes.
@@ -91,11 +104,8 @@ Description: >-
 #     EC2_SNAPSHOT_CLONE_TOKEN before the first boot. The deploy script writes it.
 #   - Not verified: a restart of the instance does not run the user data again. Then a new
 #     SnapshotTag reaches the host only with a new instance or with a run by hand.
-#   - Not verified: an update that replaces the instance can fail at the attachment of the
-#     data volume, because the old instance holds the volume until it is deleted.
-#   - Not verified: a stack update reads AmiParameter again, so a new Amazon Linux image
-#     can replace the instance. The Elastic IP, the data volume and the file system stay.
-#     The deploy script shows the change set before it runs an update.
+#   - Not verified: the two steps of the instance replacement on a live stack. The tests
+#     of the deploy script use a stub of the AWS CLI.
 #   - Not verified: EFS accepts the file system policy at the create, and the host mounts
 #     each access point under it.
 
@@ -112,10 +122,11 @@ Parameters:
     Default: t3a.large
     AllowedValues: [t3a.large, t3a.xlarge, t3.large, t3.xlarge, m7i-flex.large, m7i-flex.xlarge]
     Description: The instance type, x86_64. A t type runs in Unlimited credit mode.
-  AmiParameter:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: The public SSM parameter that gives the image id of Amazon Linux 2023, x86_64.
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: >-
+      The pinned image id of Amazon Linux 2023, x86_64. A new value replaces the instance:
+      use the two steps of `scripts/aws-host.sh deploy --replace-instance`.
   VpcCidr:
     Type: String
     AllowedPattern: ^(\d{1,3}\.){3}\d{1,3}/(1[6-9]|2[0-6])$
@@ -208,6 +219,13 @@ Parameters:
     Default: 100
     MinValue: 1
     Description: The billing alarm starts when the estimated charges of the month pass this value in USD.
+  AttachInstance:
+    Type: String
+    Default: "true"
+    AllowedValues: ["false", "true"]
+    Description: >-
+      true attaches the data volume and the Elastic IP to the instance. false removes the two
+      attachments: step 1 of an instance replacement sets it, and step 2 sets true again.
 
 Rules:
   AlarmEmailWithOperations:
@@ -220,6 +238,7 @@ Conditions:
   HasPangolin: !Equals [!Ref EnablePangolin, "true"]
   HasBucket: !Equals [!Ref EnableBucket, "true"]
   HasOperations: !Equals [!Ref EnableOperations, "true"]
+  HasAttachments: !Equals [!Ref AttachInstance, "true"]
   IsBurstable: !Or
     - !Equals [!Ref InstanceType, t3a.large]
     - !Equals [!Ref InstanceType, t3a.xlarge]
@@ -336,7 +355,7 @@ Resources:
         - {Key: Project, Value: !Ref Project}
 
   # ----- EFS: one encrypted file system, one mount target, three access points.
-  # No automatic backup. The file system stays when the stack is deleted.
+  # The file system stays when the stack is deleted.
   FileSystem:
     Type: AWS::EFS::FileSystem
     DeletionPolicy: RetainExceptOnCreate
@@ -345,8 +364,11 @@ Resources:
       Encrypted: true
       PerformanceMode: generalPurpose
       ThroughputMode: bursting
+      # The automatic backup of EFS: AWS Backup makes a daily backup with a 35-day retention
+      # in the vault aws/efs/automatic-backup-vault. The service manages that vault and its
+      # plan, not this template. A change of BackupPolicy needs no replacement.
       BackupPolicy:
-        Status: DISABLED
+        Status: ENABLED
       # Without a policy, each NFS client that reaches the mount target has full access with
       # no IAM. The policy cannot name the access points: the reference would be circular.
       # The instance role names them (the statement EfsOnlyTheAccessPoints). The policy names
@@ -450,8 +472,11 @@ Resources:
         - {Key: Project, Value: !Ref Project}
         - {Key: Backup, Value: !Ref Project}
 
+  # Step 1 of an instance replacement removes the attachment (AttachInstance false): the old
+  # instance gives the volume up before step 2 attaches it to the new instance.
   DataVolumeAttachment:
     Type: AWS::EC2::VolumeAttachment
+    Condition: HasAttachments
     Properties:
       InstanceId: !Ref Instance
       VolumeId: !Ref DataVolume
@@ -698,7 +723,7 @@ Resources:
     Type: AWS::EC2::Instance
     DependsOn: [DefaultRoute, SubnetRouteTableAssociation, MountTarget]
     Properties:
-      ImageId: !Ref AmiParameter
+      ImageId: !Ref AmiId
       InstanceType: !Ref InstanceType
       SubnetId: !Ref Subnet
       SecurityGroupIds: [!Ref InstanceSecurityGroup]
@@ -781,8 +806,11 @@ Resources:
         # This conditional reference makes the log group precede an operations boot.
         - !If [HasOperations, {Key: OperationsLogGroup, Value: !Ref LogGroup}, !Ref AWS::NoValue]
 
+  # Step 1 of an instance replacement removes the association too: the site is down from
+  # that step, and step 2 makes one new association with the new instance.
   ElasticIpAssociation:
     Type: AWS::EC2::EIPAssociation
+    Condition: HasAttachments
     Properties:
       AllocationId: !GetAtt ElasticIp.AllocationId
       InstanceId: !Ref Instance

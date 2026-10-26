@@ -35,9 +35,11 @@
 #   /srv/data/pangolin/config, /srv/data/pangolin/gerbil, /srv/data/pangolin/traefik
 #
 # Variables: the names of this file are in the block "Option pangolin" of `.env.example`.
-# The two Porkbun names are in the block "DNS provider porkbun": Traefik gets its
-# wildcard certificate from a DNS-01 challenge through Porkbun, so this option needs
-# the provider `porkbun` today. A missing value stops Compose only when this file is on.
+# Traefik gets its wildcard certificate from a DNS-01 challenge through the provider of
+# EC2_DNS_PROVIDER: `porkbun` (the two names of the block "DNS provider porkbun") or
+# `cloudflare` (EC2_CLOUDFLARE_DNS01_TOKEN of the block "DNS provider cloudflare").
+# Step 2 of scripts/host-bootstrap.sh stops on an empty name of the provider, so the
+# names of the provider that is off are empty here.
 #
 # Images: the tags of `kits.lock`.
 
@@ -127,8 +129,9 @@ services:
 
   # Traefik: ends TLS for each resource with one wildcard certificate from the DNS-01
   # challenge. It shares the network namespace of `gerbil`, so it has no network entry
-  # and no port entry of its own. The two Porkbun names are the names that the DNS
-  # provider of Traefik reads.
+  # and no port entry of its own. The DNS provider of Traefik reads its credential from
+  # the environment: the two Porkbun names, or the two Cloudflare names. One Cloudflare
+  # token with the rights Zone Read and DNS Edit on the one zone serves both names.
   # Its directory of the data volume has two parts: the two rendered files, read-only,
   # and the certificate store. `pangolin` and `gerbil` do not mount it. It mounts no
   # Docker socket.
@@ -149,8 +152,10 @@ services:
     command:
       - --configFile=/etc/traefik/traefik_config.yml
     environment:
-      PORKBUN_API_KEY: ${EC2_PORKBUN_API_KEY:?add a value to .env (.env.example)}
-      PORKBUN_SECRET_API_KEY: ${EC2_PORKBUN_SECRET_KEY:?add a value to .env (.env.example)}
+      PORKBUN_API_KEY: ${EC2_PORKBUN_API_KEY:-}
+      PORKBUN_SECRET_API_KEY: ${EC2_PORKBUN_SECRET_KEY:-}
+      CF_DNS_API_TOKEN: ${EC2_CLOUDFLARE_DNS01_TOKEN:-}
+      CF_ZONE_API_TOKEN: ${EC2_CLOUDFLARE_DNS01_TOKEN:-}
       TZ: ${EC2_TZ:?add a value to .env (.env.example)}
     volumes:
       - type: bind
